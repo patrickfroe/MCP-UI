@@ -9,8 +9,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ToolWidgetRenderer } from "@/components/tool-widget-renderer";
 import {
-  buildInitialArgs,
-  buildInputSummary,
   coerceArgsForSubmission,
   getInputFields,
   getLatestRunForTool,
@@ -18,35 +16,14 @@ import {
   shouldRenderWidget,
   validateToolArgs,
 } from "@/lib/tool-execution";
-
-interface RunHistoryItem {
-  id: string;
-  toolName: string;
-  timestamp: string;
-  status: "success" | "error";
-  inputSummary: string;
-  args: Record<string, unknown>;
-}
+import { createRunHistoryItem, filterTools, getNextSelectionState, serializeFallbackResult, type RunHistoryItem } from "@/lib/host-shell-model";
 
 function ResultFallbackView({ result }: { result: unknown }) {
   const [showRawJson, setShowRawJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const prettyResult = useMemo(() => {
-    if (result === null || result === undefined) {
-      return "No result data returned.";
-    }
-
-    if (typeof result === "string") {
-      return result;
-    }
-
-    try {
-      return JSON.stringify(result, null, 2);
-    } catch {
-      return String(result);
-    }
-  }, [result]);
+  const serialized = useMemo(() => serializeFallbackResult(result), [result]);
+  const prettyResult = serialized.pretty;
 
   const copyResult = async () => {
     try {
@@ -69,7 +46,7 @@ function ResultFallbackView({ result }: { result: unknown }) {
         </Button>
       </div>
       <pre className="max-h-80 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-800">
-        {showRawJson ? JSON.stringify(result) : prettyResult}
+        {showRawJson ? serialized.raw : prettyResult}
       </pre>
     </div>
   );
@@ -93,8 +70,9 @@ export function HostShell() {
         const toolData = await hostClient.listTools();
         setTools(toolData.tools);
         if (toolData.tools[0]) {
-          setSelectedToolName(toolData.tools[0].name);
-          setArgs(buildInitialArgs(toolData.tools[0]));
+          const next = getNextSelectionState(toolData.tools, toolData.tools[0].name);
+          setSelectedToolName(next.selectedToolName);
+          setArgs(next.args);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to initialize host");
@@ -109,15 +87,7 @@ export function HostShell() {
 
   const selectedToolRun = useMemo(() => getLatestRunForTool(runs, selectedToolName), [runs, selectedToolName]);
 
-  const filteredTools = useMemo(() => {
-    const needle = search.toLowerCase();
-    return tools.filter(
-      (tool) =>
-        tool.name.toLowerCase().includes(needle) ||
-        (tool.title ?? "").toLowerCase().includes(needle) ||
-        (tool.description ?? "").toLowerCase().includes(needle),
-    );
-  }, [search, tools]);
+  const filteredTools = useMemo(() => filterTools(tools, search), [search, tools]);
 
   const toolFields = useMemo(() => getInputFields(selectedTool), [selectedTool]);
 
@@ -130,28 +100,25 @@ export function HostShell() {
       const data = await hostClient.callTool(tool.name, nextArgs);
       setRuns((previous) => [data.run, ...previous]);
       setRunHistory((previous) => [
-        {
+        createRunHistoryItem({
           id: data.run.id,
           toolName: data.run.toolName,
           timestamp: data.run.createdAt,
           status: data.run.succeeded ? "success" : "error",
-          inputSummary: buildInputSummary(nextArgs),
           args: nextArgs,
-        },
+        }),
         ...previous,
       ]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Tool call failed";
       setError(message);
       setRunHistory((previous) => [
-        {
+        createRunHistoryItem({
           id: `error-${Date.now()}`,
           toolName: tool.name,
-          timestamp: new Date().toISOString(),
           status: "error",
-          inputSummary: buildInputSummary(nextArgs),
           args: nextArgs,
-        },
+        }),
         ...previous,
       ]);
     } finally {
@@ -283,8 +250,9 @@ export function HostShell() {
                     selectedToolName === tool.name ? "border-slate-500 bg-slate-100" : "border-slate-200"
                   }`}
                   onClick={() => {
-                    setSelectedToolName(tool.name);
-                    setArgs(buildInitialArgs(tool));
+                    const next = getNextSelectionState(tools, tool.name);
+                    setSelectedToolName(next.selectedToolName);
+                    setArgs(next.args);
                     setWidgetError(null);
                   }}
                 >

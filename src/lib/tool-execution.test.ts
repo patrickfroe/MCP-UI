@@ -4,13 +4,14 @@ import {
   buildInitialArgs,
   coerceArgsForSubmission,
   getInputFields,
+  getLatestRunForTool,
   isUiCapableTool,
   shouldRenderWidget,
   validateToolArgs,
 } from "@/lib/tool-execution";
-import type { MCPToolDescriptor, MCPToolRun } from "@/lib/types";
+import { makeRun, makeTool, makeUiTool } from "@/test-utils/fixtures";
 
-const schemaTool: MCPToolDescriptor = {
+const schemaTool = makeTool({
   name: "weather.get",
   inputSchema: {
     type: "object",
@@ -18,87 +19,78 @@ const schemaTool: MCPToolDescriptor = {
     properties: {
       city: { type: "string", default: "Seattle" },
       days: { type: "integer" },
+      ratio: { type: "number" },
       includeHourly: { type: "boolean", default: true },
       units: { type: "string", enum: ["metric", "imperial"] },
       tags: { type: "array" },
+      config: { type: "object" },
     },
   },
-};
+});
 
-test("schema-to-form mapping handles defaults, required fields, and enums", () => {
+test("schema-to-form mapping handles required/default/enum and empty schema", () => {
   const fields = getInputFields(schemaTool);
-  const cityField = fields.find((field) => field.name === "city");
-  const unitsField = fields.find((field) => field.name === "units");
-
-  assert.equal(cityField?.required, true);
-  assert.deepEqual(unitsField?.schema.enum, ["metric", "imperial"]);
+  assert.equal(fields.length, 7);
+  assert.equal(fields.find((f) => f.name === "city")?.required, true);
 
   const initial = buildInitialArgs(schemaTool);
   assert.equal(initial.city, "Seattle");
-  assert.equal(initial.includeHourly, true);
   assert.equal(initial.units, "metric");
+  assert.equal(initial.includeHourly, true);
+
+  assert.deepEqual(getInputFields(makeTool({ inputSchema: undefined })), []);
+  assert.deepEqual(buildInitialArgs(makeTool({ inputSchema: undefined })), {});
 });
 
-test("UI-capable vs non-UI tool rendering path is deterministic", () => {
-  const uiTool: MCPToolDescriptor = {
-    name: "stocks.chart",
-    uiBinding: { resourceUri: "ui://stocks/chart" },
-  };
+test("coercion and validation cover string/number/integer/boolean/enum/object/array", () => {
+  const coerced = coerceArgsForSubmission(schemaTool, {
+    city: "SEA",
+    days: "5",
+    ratio: "2.5",
+    includeHourly: true,
+    units: "imperial",
+    tags: '["a","b"]',
+    config: '{"foo":1}',
+  });
 
-  const nonUiTool: MCPToolDescriptor = {
-    name: "stocks.quote",
-  };
+  assert.equal(coerced.days, 5);
+  assert.equal(coerced.ratio, 2.5);
+  assert.deepEqual(coerced.tags, ["a", "b"]);
+  assert.deepEqual(coerced.config, { foo: 1 });
+  assert.equal(coerced.units, "imperial");
 
-  const successRun: MCPToolRun = {
-    id: "run_1",
-    toolName: "stocks.chart",
-    args: {},
-    result: { ok: true },
-    succeeded: true,
-    createdAt: new Date().toISOString(),
-  };
+  const errors = validateToolArgs(schemaTool, {
+    city: "",
+    days: "abc",
+    tags: "not-json",
+    config: "[]",
+  });
+
+  assert.ok(errors.includes("city is required."));
+  assert.ok(errors.includes("days must be a valid number."));
+  assert.ok(errors.includes("tags must be valid JSON."));
+  assert.ok(errors.includes("config must be a JSON object."));
+});
+
+test("ui-capable/widget path and latest-run selection are deterministic", () => {
+  const uiTool = makeUiTool();
+  const nonUiTool = makeTool({ uiBinding: undefined });
+
+  const successRun = makeRun({ toolName: uiTool.name, succeeded: true });
+  const failedRun = makeRun({ toolName: uiTool.name, succeeded: false });
 
   assert.equal(isUiCapableTool(uiTool), true);
   assert.equal(isUiCapableTool(nonUiTool), false);
+
   assert.equal(shouldRenderWidget(uiTool, successRun), true);
   assert.equal(shouldRenderWidget(nonUiTool, successRun), false);
-});
-
-test("execution error path validation catches bad number/integer input", () => {
-  const errors = validateToolArgs(schemaTool, {
-    city: "Seattle",
-    days: "abc",
-  });
-
-  assert.ok(errors.some((message) => message.includes("days must be a valid number.")));
-});
-
-test("widget failure fallback path keeps widget hidden when run is not successful", () => {
-  const uiTool: MCPToolDescriptor = {
-    name: "stocks.chart",
-    uiBinding: { resourceUri: "ui://stocks/chart" },
-  };
-
-  const failedRun: MCPToolRun = {
-    id: "run_2",
-    toolName: "stocks.chart",
-    args: {},
-    result: { error: "boom" },
-    succeeded: false,
-    createdAt: new Date().toISOString(),
-  };
-
   assert.equal(shouldRenderWidget(uiTool, failedRun), false);
-});
 
-test("submission coercion parses numeric and JSON payloads", () => {
-  const parsed = coerceArgsForSubmission(schemaTool, {
-    city: "Seattle",
-    days: "5",
-    includeHourly: true,
-    tags: '["a","b"]',
-  });
-
-  assert.equal(parsed.days, 5);
-  assert.deepEqual(parsed.tags, ["a", "b"]);
+  const runs = [
+    makeRun({ id: "1", toolName: "tool.a" }),
+    makeRun({ id: "2", toolName: "tool.b" }),
+    makeRun({ id: "3", toolName: "tool.a" }),
+  ];
+  assert.equal(getLatestRunForTool(runs, "tool.a")?.id, "1");
+  assert.equal(getLatestRunForTool(runs, "tool.c"), null);
 });
