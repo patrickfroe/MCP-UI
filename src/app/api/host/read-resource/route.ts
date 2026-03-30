@@ -1,20 +1,22 @@
 import { NextResponse } from "next/server";
-import { mcpHostStore } from "@/lib/mcp-host-store";
+import { mcpHostAdapter } from "@/lib/mcp-host/adapter";
+import { toMCPHostError } from "@/lib/mcp-host/errors";
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as { resourceUri?: string };
-
-  if (!body.resourceUri) {
-    return NextResponse.json({ message: "resourceUri is required" }, { status: 400 });
-  }
-
   try {
-    const contents = mcpHostStore.readResource(body.resourceUri);
-    return NextResponse.json({ resourceUri: body.resourceUri, contents });
+    const body = (await request.json()) as { resourceUri?: string };
+
+    if (!body.resourceUri) {
+      return NextResponse.json(
+        { error: { code: "BAD_REQUEST", message: "resourceUri is required" } },
+        { status: 400 },
+      );
+    }
+
+    const resource = await mcpHostAdapter.readResource(body.resourceUri);
+    return NextResponse.json(resource);
   } catch (error) {
-    return NextResponse.json(
-      { message: error instanceof Error ? error.message : "Resource read failed" },
-      { status: 404 },
-    );
+    const hostError = toMCPHostError(error, "RESOURCE_READ_FAILED");
+    return NextResponse.json({ error: hostError }, { status: 500 });
   }
 }
