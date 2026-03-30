@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { mcpHostStore } from "@/lib/mcp-host-store";
+import { mcpHostAdapter } from "@/lib/mcp-host/adapter";
 
 export async function GET() {
-  const connection = mcpHostStore.status();
+  const connection = mcpHostAdapter.status();
   return NextResponse.json({ connection });
 }

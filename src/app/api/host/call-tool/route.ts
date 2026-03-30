@@ -1,13 +1,22 @@
 import { NextResponse } from "next/server";
-import { mcpHostStore } from "@/lib/mcp-host-store";
+import { mcpHostAdapter } from "@/lib/mcp-host/adapter";
+import { toMCPHostError } from "@/lib/mcp-host/errors";
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as { toolName?: string; args?: Record<string, unknown> };
+  try {
+    const body = (await request.json()) as { toolName?: string; args?: Record<string, unknown> };
 
-  if (!body.toolName) {
-    return NextResponse.json({ message: "toolName is required" }, { status: 400 });
+    if (!body.toolName) {
+      return NextResponse.json(
+        { error: { code: "BAD_REQUEST", message: "toolName is required" } },
+        { status: 400 },
+      );
+    }
+
+    const run = await mcpHostAdapter.callTool(body.toolName, body.args ?? {});
+    return NextResponse.json({ run });
+  } catch (error) {
+    const hostError = toMCPHostError(error, "TOOL_CALL_FAILED");
+    return NextResponse.json({ error: hostError }, { status: 500 });
   }
-
-  const run = mcpHostStore.callTool(body.toolName, body.args ?? {});
-  return NextResponse.json({ run });
 }

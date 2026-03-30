@@ -9,8 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ToolWidgetRenderer } from "@/components/tool-widget-renderer";
 
-function hasUi(tool: MCPToolDescriptor): tool is MCPToolDescriptor & { _meta: { ui: { resourceUri: string } } } {
-  return Boolean(tool._meta?.ui?.resourceUri);
+function hasUi(tool: MCPToolDescriptor): tool is MCPToolDescriptor & { uiBinding: { resourceUri: string } } {
+  return Boolean(tool.uiBinding?.resourceUri);
 }
 
 function buildInitialArgs(tool?: MCPToolDescriptor) {
@@ -74,8 +74,8 @@ export function HostShell() {
 
     void (async () => {
       try {
-        const data = await hostClient.readResource(selectedTool._meta.ui.resourceUri);
-        setResourceContents(data.contents);
+        const data = await hostClient.readResource(selectedTool.uiBinding.resourceUri);
+        setResourceContents(data.text ?? data.blob ?? null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to read widget resource");
       }
@@ -107,8 +107,7 @@ export function HostShell() {
 
   const renderForm = () => {
     const properties =
-      (selectedTool?.inputSchema as { properties?: Record<string, { type?: string; enum?: string[] }> })
-        ?.properties ?? {};
+      (selectedTool?.inputSchema?.properties as Record<string, { type?: string; enum?: string[] }> | undefined) ?? {};
 
     const entries = Object.entries(properties);
 
@@ -207,7 +206,7 @@ export function HostShell() {
             <h3 className="mb-2 text-sm font-semibold">Result / Widget</h3>
             {selectedTool && hasUi(selectedTool) && resourceContents ? (
               <ToolWidgetRenderer
-                resourceUri={selectedTool._meta.ui.resourceUri}
+                resourceUri={selectedTool.uiBinding.resourceUri}
                 resourceContents={resourceContents}
               />
             ) : (

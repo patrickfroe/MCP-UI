@@ -1,4 +1,9 @@
-import type { MCPServerConnection, MCPToolDescriptor, MCPToolRun } from "@/lib/types";
+import type { MCPHostError, MCPResourceContents, MCPServerConnection, MCPToolDescriptor, MCPToolRun } from "@/lib/types";
+
+interface HostErrorResponse {
+  error?: MCPHostError;
+  message?: string;
+}
 
 async function hostRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -9,12 +14,16 @@ async function hostRequest<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
 
+  const payload = (await response.json().catch(() => ({}))) as T & HostErrorResponse;
+
   if (!response.ok) {
-    const errorBody = await response.json().catch(() => ({ message: "Host API request failed" }));
-    throw new Error(errorBody.message ?? `Request failed: ${response.status}`);
+    if (payload.error) {
+      throw new Error(`${payload.error.code}: ${payload.error.message}`);
+    }
+    throw new Error(payload.message ?? `Request failed: ${response.status}`);
   }
 
-  return response.json() as Promise<T>;
+  return payload as T;
 }
 
 export const hostClient = {
@@ -35,7 +44,7 @@ export const hostClient = {
     }),
 
   readResource: (resourceUri: string) =>
-    hostRequest<{ resourceUri: string; contents: string }>("/api/host/read-resource", {
+    hostRequest<MCPResourceContents>("/api/host/read-resource", {
       method: "POST",
       body: JSON.stringify({ resourceUri }),
     }),
