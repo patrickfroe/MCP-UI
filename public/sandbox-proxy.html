@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MCP Sandbox Proxy</title>
+  </head>
+  <body>
+    <script>
+      // Minimal proxy shell for MCP UI AppRenderer sandbox flow.
+      window.parent?.postMessage({ type: "mcp-sandbox-proxy-ready" }, "*");
+    </script>
+  </body>
+</html>
