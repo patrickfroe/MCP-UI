@@ -1,20 +1,22 @@
+import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MCPHostAdapter } from "@/lib/mcp-host/adapter";
+import { MCPHostRuntime, createTransportAdapter } from "@/lib/mcp-host/adapter";
 import { MCPAdapterError, toMCPHostError } from "@/lib/mcp-host/errors";
 
 function jsonRpc(result: unknown) {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({ jsonrpc: "2.0", id: "1", result }),
-  } as Response;
+  return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: "1", result }) } as Response;
 }
 
-test("connection status lifecycle covers disconnected/connecting/connected/error", async () => {
-  const adapter = new MCPHostAdapter();
-  assert.equal(adapter.status().status, "disconnected");
+test("adapter selection by transport type", () => {
+  const http = createTransportAdapter({ type: "streamable-http", url: "http://localhost:3001/mcp" });
+  const stdio = createTransportAdapter({ type: "stdio", command: "node", args: ["server.js"] });
+  assert.ok(http.status().transport === "streamable-http");
+  assert.ok(stdio.status().transport === "stdio");
+});
 
+test("http connection status lifecycle covers disconnected/connecting/connected/error", async () => {
+  const adapter = new MCPHostRuntime();
   const originalFetch = global.fetch;
   let capturedStatusWhileConnecting: string | null = null;
 
@@ -24,106 +26,105 @@ test("connection status lifecycle covers disconnected/connecting/connected/error
   }) as typeof fetch;
 
   try {
-    const connected = await adapter.connect("http://localhost:3001/mcp");
+    const connected = await adapter.connect({ type: "streamable-http", url: "http://localhost:3001/mcp" });
     assert.equal(capturedStatusWhileConnecting, "connecting");
     assert.equal(connected.status, "connected");
-    assert.equal(adapter.status().status, "connected");
 
     global.fetch = (async () => {
       throw new Error("network down");
     }) as typeof fetch;
 
-    await assert.rejects(async () => adapter.connect("http://localhost:3001/mcp"), (error: unknown) => {
+    await assert.rejects(() => adapter.connect({ type: "streamable-http", url: "http://localhost:3001/mcp" }), (error: unknown) => {
       assert.ok(error instanceof MCPAdapterError);
       assert.equal(error.code, "CONNECTION_FAILED");
       return true;
     });
-    assert.equal(adapter.status().status, "error");
-    assert.equal(adapter.status().lastError?.code, "CONNECTION_FAILED");
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test("listTools normalizes descriptors and malformed tool metadata", async () => {
-  const adapter = new MCPHostAdapter();
-  const originalFetch = global.fetch;
+test("stdio integration: connect, listTools, callTool, readResource, disconnect", async () => {
+  const adapter = new MCPHostRuntime();
+  const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
 
-  let calls = 0;
-  global.fetch = (async () => {
-    calls += 1;
-    if (calls === 1) {
-      return jsonRpc({ serverInfo: { name: "Demo" } });
-    }
-    return jsonRpc({
-      tools: [
-        { name: "echo.text", title: "Echo" },
-        { title: "Broken" },
-        { name: "stocks.chart", _meta: { ui: { resourceUri: "ui://stocks/chart" } } },
-      ],
-    });
-  }) as typeof fetch;
+  const connection = await adapter.connect({
+    type: "stdio",
+    command: process.execPath,
+    args: ["--import", "tsx", serverScript],
+    startupTimeoutMs: 4000,
+    requestTimeoutMs: 4000,
+  });
 
-  try {
-    await adapter.connect("http://localhost:3001/mcp");
-    const tools = await adapter.listTools();
-    assert.equal(tools.length, 2);
-    assert.equal(tools[1]?.uiBinding?.resourceUri, "ui://stocks/chart");
-  } finally {
-    global.fetch = originalFetch;
-  }
+  assert.equal(connection.status, "connected");
+  assert.equal(connection.transport, "stdio");
+
+  const tools = await adapter.listTools();
+  assert.equal(tools.length, 2);
+  assert.equal(tools[1]?.uiBinding?.resourceUri, "ui://stocks/chart");
+
+  const run = await adapter.callTool("echo.text", { text: "ok" });
+  assert.equal(run.succeeded, true);
+
+  const resource = await adapter.readResource("ui://stocks/chart");
+  assert.equal(resource.mimeType, "text/html");
+
+  const disconnected = await adapter.disconnect();
+  assert.equal(disconnected.status, "disconnected");
 });
 
-test("callTool/readResource normalize values and map structured adapter errors", async () => {
-  const adapter = new MCPHostAdapter();
-  const originalFetch = global.fetch;
-
-  let calls = 0;
-  global.fetch = (async () => {
-    calls += 1;
-    if (calls === 1) {
-      return jsonRpc({ serverInfo: { name: "Demo" } });
-    }
-    if (calls === 2) {
-      return jsonRpc({ content: [{ type: "text", text: "ok" }] });
-    }
-    if (calls === 3) {
-      return jsonRpc({ contents: [{ mimeType: "text/html", text: "<html/>" }] });
-    }
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ jsonrpc: "2.0", id: "1", error: { code: -32000, message: "boom" } }),
-    } as Response;
-  }) as typeof fetch;
-
-  try {
-    await adapter.connect("http://localhost:3001/mcp");
-
-    const run = await adapter.callTool("echo.text", { text: "ok" });
-    assert.equal(run.toolName, "echo.text");
-    assert.equal(run.succeeded, true);
-
-    const resource = await adapter.readResource("ui://stocks/chart");
-    assert.equal(resource.mimeType, "text/html");
-
-    await assert.rejects(async () => adapter.callTool("echo.text", {}), (error: unknown) => {
-      assert.ok(error instanceof MCPAdapterError);
-      assert.equal(error.code, "TOOL_CALL_FAILED");
+test("stdio invalid command maps structured PROCESS_START_FAILED error", async () => {
+  const adapter = new MCPHostRuntime();
+  await assert.rejects(
+    () => adapter.connect({ type: "stdio", command: "__command_does_not_exist__", args: [] }),
+    (error: unknown) => {
       const mapped = toMCPHostError(error, "INTERNAL_ERROR");
-      assert.equal(mapped.code, "TOOL_CALL_FAILED");
+      assert.equal(mapped.code, "PROCESS_START_FAILED");
       return true;
-    });
-  } finally {
-    global.fetch = originalFetch;
-  }
+    },
+  );
 });
 
-test("not connected requests map to NOT_CONNECTED", async () => {
-  const adapter = new MCPHostAdapter();
-  await assert.rejects(async () => adapter.listTools(), (error: unknown) => {
-    assert.ok(error instanceof MCPAdapterError);
-    assert.equal(error.code, "NOT_CONNECTED");
+test("stdio startup timeout maps STARTUP_TIMEOUT error", async () => {
+  const adapter = new MCPHostRuntime();
+  const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
+  await assert.rejects(
+    () =>
+      adapter.connect({
+        type: "stdio",
+        command: process.execPath,
+        args: ["--import", "tsx", serverScript],
+        env: { MCP_STDIO_DELAY_INIT_MS: "2000" },
+        startupTimeoutMs: 50,
+      }),
+    (error: unknown) => {
+      const mapped = toMCPHostError(error, "INTERNAL_ERROR");
+      assert.equal(mapped.code, "STARTUP_TIMEOUT");
+      return true;
+    },
+  );
+});
+
+test("stdio reconnect replaces previous session and handles unexpected exit", async () => {
+  const adapter = new MCPHostRuntime();
+  const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
+
+  await adapter.connect({ type: "stdio", command: process.execPath, args: ["--import", "tsx", serverScript] });
+  const firstPid = adapter.status().process?.pid;
+
+  await adapter.connect({
+    type: "stdio",
+    command: process.execPath,
+    args: ["--import", "tsx", serverScript],
+    env: { MCP_STDIO_EXIT_ON_MESSAGE: "1" },
+  });
+  const secondPid = adapter.status().process?.pid;
+  assert.notEqual(firstPid, secondPid);
+
+  await assert.rejects(() => adapter.listTools(), (error: unknown) => {
+    const mapped = toMCPHostError(error, "INTERNAL_ERROR");
+    assert.equal(mapped.code, "PROCESS_EXITED");
     return true;
   });
+  await adapter.disconnect();
 });

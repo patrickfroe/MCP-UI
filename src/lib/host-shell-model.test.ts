@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRunHistoryItem, filterTools, getNextSelectionState, serializeFallbackResult } from "@/lib/host-shell-model";
+import {
+  buildConnectionConfig,
+  createRunHistoryItem,
+  filterTools,
+  getNextSelectionState,
+  parseEnvText,
+  serializeFallbackResult,
+  validateConnectionConfig,
+} from "@/lib/host-shell-model";
 import { makeTool, makeUiTool } from "@/test-utils/fixtures";
 
 test("tool list filtering and selection state reset behavior", () => {
@@ -23,6 +31,37 @@ test("tool list filtering and selection state reset behavior", () => {
   assert.deepEqual(missing.args, {});
 });
 
+test("connection form model switches transport fields and validates command/url", () => {
+  const httpConfig = buildConnectionConfig("streamable-http", "http://localhost:3001/mcp", {
+    command: "",
+    argsText: "",
+    cwd: "",
+    envText: "",
+  });
+  assert.equal(httpConfig.type, "streamable-http");
+  assert.equal(validateConnectionConfig(httpConfig), null);
+
+  const stdioConfig = buildConnectionConfig("stdio", "", {
+    command: "node",
+    argsText: "server.js --stdio",
+    cwd: "/tmp",
+    envText: "FOO=bar\nEMPTY=",
+  });
+  assert.equal(stdioConfig.type, "stdio");
+  assert.deepEqual(stdioConfig.args, ["server.js", "--stdio"]);
+  assert.deepEqual(stdioConfig.env, { FOO: "bar", EMPTY: "" });
+  assert.equal(validateConnectionConfig(stdioConfig), null);
+
+  const invalid = buildConnectionConfig("stdio", "", {
+    command: "",
+    argsText: "",
+    cwd: "",
+    envText: "",
+  });
+  assert.equal(validateConnectionConfig(invalid), "Command is required for local STDIO transport.");
+  assert.deepEqual(parseEnvText("A=1\nB=two"), { A: "1", B: "two" });
+});
+
 test("run history metadata includes tool name/status/timestamp/input summary", () => {
   const history = createRunHistoryItem({
     id: "run-1",
@@ -35,7 +74,7 @@ test("run history metadata includes tool name/status/timestamp/input summary", (
   assert.equal(history.toolName, "echo.text");
   assert.equal(history.status, "success");
   assert.equal(history.timestamp, "2026-03-30T00:00:00.000Z");
-  assert.ok(history.inputSummary.includes("text=\"hello\""));
+  assert.ok(history.inputSummary.includes('text="hello"'));
 });
 
 test("fallback renderer serialization supports plain text/json/array/empty/unexpected", () => {
@@ -44,10 +83,6 @@ test("fallback renderer serialization supports plain text/json/array/empty/unexp
   assert.equal(serializeFallbackResult([1, 2]).raw, "[1,2]");
   assert.equal(serializeFallbackResult(undefined).pretty, "No result data returned.");
 
-  const weird = {
-    toString() {
-      return "[custom]";
-    },
-  };
+  const weird = { toString() { return "[custom]"; } };
   assert.equal(serializeFallbackResult(weird).pretty.includes("custom") || serializeFallbackResult(weird).pretty.includes("{"), true);
 });
