@@ -2,12 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { hostClient } from "@/lib/host-client";
-import type { MCPToolDescriptor, MCPToolRun } from "@/lib/types";
+import type { MCPConnectionStatus, MCPToolDescriptor, MCPToolRun } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ToolWidgetRenderer } from "@/components/tool-widget-renderer";
+import { ToolWidgetRenderer, type WidgetRenderStatus } from "@/components/tool-widget-renderer";
 import {
   coerceArgsForSubmission,
   getInputFields,
@@ -18,16 +18,17 @@ import {
 } from "@/lib/tool-execution";
 import { createRunHistoryItem, filterTools, getNextSelectionState, serializeFallbackResult, type RunHistoryItem } from "@/lib/host-shell-model";
 
+const DEFAULT_SERVER_URL = "http://localhost:3001/mcp";
+
 function ResultFallbackView({ result }: { result: unknown }) {
   const [showRawJson, setShowRawJson] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const serialized = useMemo(() => serializeFallbackResult(result), [result]);
-  const prettyResult = serialized.pretty;
 
   const copyResult = async () => {
     try {
-      await navigator.clipboard.writeText(prettyResult);
+      await navigator.clipboard.writeText(serialized.pretty);
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
@@ -46,13 +47,27 @@ function ResultFallbackView({ result }: { result: unknown }) {
         </Button>
       </div>
       <pre className="max-h-80 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-800">
-        {showRawJson ? serialized.raw : prettyResult}
+        {showRawJson ? serialized.raw : serialized.pretty}
       </pre>
     </div>
   );
 }
 
+function ToolCapabilityBadge({ isUi }: { isUi: boolean }) {
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+        isUi ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"
+      }`}
+    >
+      {isUi ? "UI-capable" : "No embedded UI"}
+    </span>
+  );
+}
+
 export function HostShell() {
+  const [connectionStatus, setConnectionStatus] = useState<MCPConnectionStatus>("disconnected");
+  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [tools, setTools] = useState<MCPToolDescriptor[]>([]);
   const [selectedToolName, setSelectedToolName] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -61,24 +76,12 @@ export function HostShell() {
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [widgetError, setWidgetError] = useState<string | null>(null);
+  const [widgetStatus, setWidgetStatus] = useState<WidgetRenderStatus>("idle");
   const [isRunning, setIsRunning] = useState(false);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        await hostClient.connect("http://localhost:3001/mcp");
-        const toolData = await hostClient.listTools();
-        setTools(toolData.tools);
-        if (toolData.tools[0]) {
-          const next = getNextSelectionState(toolData.tools, toolData.tools[0].name);
-          setSelectedToolName(next.selectedToolName);
-          setArgs(next.args);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to initialize host");
-      }
-    })();
-  }, []);
+  const isConnecting = connectionStatus === "connecting";
+  const isConnected = connectionStatus === "connected";
+  const canConnect = serverUrl.trim().length > 0 && !isConnecting;
 
   const selectedTool = useMemo(
     () => tools.find((tool) => tool.name === selectedToolName) ?? null,
@@ -86,15 +89,62 @@ export function HostShell() {
   );
 
   const selectedToolRun = useMemo(() => getLatestRunForTool(runs, selectedToolName), [runs, selectedToolName]);
-
   const filteredTools = useMemo(() => filterTools(tools, search), [search, tools]);
-
   const toolFields = useMemo(() => getInputFields(selectedTool), [selectedTool]);
+
+  const loadConnectionStatus = async () => {
+    try {
+      const { connection } = await hostClient.status();
+      setConnectionStatus(connection.status);
+      setServerUrl(connection.baseUrl || DEFAULT_SERVER_URL);
+      if (connection.status === "connected") {
+        const toolData = await hostClient.listTools();
+        setTools(toolData.tools);
+        const next = getNextSelectionState(toolData.tools, toolData.tools[0]?.name ?? null);
+        setSelectedToolName(next.selectedToolName);
+        setArgs(next.args);
+      }
+    } catch {
+      setConnectionStatus("disconnected");
+    }
+  };
+
+  useEffect(() => {
+    void loadConnectionStatus();
+  }, []);
+
+  const connectAndLoadTools = async () => {
+    const normalizedServerUrl = serverUrl.trim();
+    if (!normalizedServerUrl) {
+      setError("No server configured. Enter a streamable HTTP MCP URL before connecting.");
+      return;
+    }
+
+    setConnectionStatus("connecting");
+    setError(null);
+
+    try {
+      await hostClient.connect(normalizedServerUrl);
+      const toolData = await hostClient.listTools();
+      setTools(toolData.tools);
+      const next = getNextSelectionState(toolData.tools, toolData.tools[0]?.name ?? null);
+      setSelectedToolName(next.selectedToolName);
+      setArgs(next.args);
+      setConnectionStatus("connected");
+    } catch (err) {
+      setTools([]);
+      setSelectedToolName(null);
+      setArgs({});
+      setConnectionStatus("error");
+      setError(err instanceof Error ? err.message : "Failed to connect to MCP server");
+    }
+  };
 
   const executeTool = async (tool: MCPToolDescriptor, nextArgs: Record<string, unknown>) => {
     setIsRunning(true);
     setError(null);
     setWidgetError(null);
+    setWidgetStatus("idle");
 
     try {
       const data = await hostClient.callTool(tool.name, nextArgs);
@@ -164,7 +214,7 @@ export function HostShell() {
     }
 
     if (!toolFields.length) {
-      return <p className="text-sm text-slate-500">This tool does not require inputs.</p>;
+      return <p className="text-sm text-slate-500">No input schema detected. This tool can run without additional input.</p>;
     }
 
     return (
@@ -230,17 +280,54 @@ export function HostShell() {
     );
   };
 
+  const latestResult = selectedToolRun?.result ?? { message: "Run a tool to view result output." };
+
   return (
     <main className="h-screen p-4">
       <div className="mb-2 flex items-center justify-between">
         <h1 className="text-xl font-semibold">MCP UI Host MVP</h1>
         <span className="text-xs text-slate-600">Single server · Streamable HTTP</span>
       </div>
-      {error && <div className="mb-2 rounded-md bg-red-100 p-2 text-sm text-red-700">{error}</div>}
-      <div className="grid h-[calc(100vh-4.5rem)] grid-cols-12 gap-3">
+
+      <Card className="mb-3 p-3">
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-64 flex-1">
+            <label htmlFor="server-url" className="text-xs font-medium text-slate-700">
+              MCP server URL
+            </label>
+            <Input
+              id="server-url"
+              value={serverUrl}
+              onChange={(event) => setServerUrl(event.target.value)}
+              placeholder="http://localhost:3001/mcp"
+            />
+          </div>
+          <Button onClick={() => void connectAndLoadTools()} disabled={!canConnect}>
+            {isConnecting ? "Connecting…" : "Connect"}
+          </Button>
+        </div>
+        <p className="mt-2 text-xs text-slate-600">
+          {connectionStatus === "connected" && "Connected. Tools are ready to run."}
+          {connectionStatus === "connecting" && "Connecting to MCP server…"}
+          {connectionStatus === "error" && "Connection failed. Check server URL and MCP server availability."}
+          {connectionStatus === "disconnected" && (serverUrl.trim() ? "Not connected yet. Connect to load tools." : "No server configured. Enter a URL to connect.")}
+        </p>
+      </Card>
+
+      {error ? <div className="mb-2 rounded-md bg-red-100 p-2 text-sm text-red-700">{error}</div> : null}
+
+      <div className="grid h-[calc(100vh-11rem)] grid-cols-12 gap-3">
         <Card className="col-span-3 p-3">
-          <Input placeholder="Search tools" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <div className="flex items-center gap-2">
+            <Input placeholder="Search tools" value={search} onChange={(event) => setSearch(event.target.value)} disabled={!isConnected} />
+            <Button type="button" variant="outline" onClick={() => void connectAndLoadTools()} disabled={!isConnected || isConnecting}>
+              Refresh
+            </Button>
+          </div>
           <div className="mt-3 space-y-2 overflow-auto">
+            {!isConnected ? <p className="text-xs text-slate-500">Connect to an MCP server to list tools.</p> : null}
+            {isConnected && tools.length === 0 ? <p className="text-xs text-slate-500">Connected, but no tools were returned by the server.</p> : null}
+            {isConnected && tools.length > 0 && filteredTools.length === 0 ? <p className="text-xs text-slate-500">No tools match the current search.</p> : null}
             {filteredTools.map((tool) => {
               const toolHasUi = isUiCapableTool(tool);
               return (
@@ -254,17 +341,12 @@ export function HostShell() {
                     setSelectedToolName(next.selectedToolName);
                     setArgs(next.args);
                     setWidgetError(null);
+                    setWidgetStatus("idle");
                   }}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-medium">{tool.title ?? tool.name}</div>
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                        toolHasUi ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"
-                      }`}
-                    >
-                      {toolHasUi ? "UI-capable" : "No embedded UI"}
-                    </span>
+                    <ToolCapabilityBadge isUi={toolHasUi} />
                   </div>
                   <div className="text-xs text-slate-500">{tool.description ?? tool.name}</div>
                 </button>
@@ -277,39 +359,36 @@ export function HostShell() {
           <div>
             <h2 className="font-semibold">{selectedTool?.title ?? "Select a tool"}</h2>
             <p className="text-sm text-slate-600">{selectedTool?.description ?? "No tool selected."}</p>
-            {selectedTool ? (
-              <span
-                className={`mt-2 inline-flex rounded px-2 py-1 text-xs font-semibold ${
-                  isUiCapableTool(selectedTool) ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"
-                }`}
-              >
-                {isUiCapableTool(selectedTool) ? "UI-capable" : "No embedded UI"}
-              </span>
-            ) : null}
+            {selectedTool ? <span className="mt-2 inline-flex"><ToolCapabilityBadge isUi={isUiCapableTool(selectedTool)} /></span> : null}
           </div>
           {renderForm()}
           <div className="flex gap-2">
-            <Button onClick={() => void runTool()} disabled={!selectedTool || isRunning}>
+            <Button onClick={() => void runTool()} disabled={!selectedTool || isRunning || !isConnected}>
               {isRunning ? "Running…" : "Run tool"}
             </Button>
-            <Button onClick={() => void rerunLastSuccessful()} disabled={isRunning || !runHistory.some((run) => run.status === "success") }>
+            <Button onClick={() => void rerunLastSuccessful()} disabled={isRunning || !runHistory.some((run) => run.status === "success") || !isConnected}>
               Re-run last successful
             </Button>
           </div>
+          {isRunning ? <p className="text-xs text-slate-600">Tool run in progress. Waiting for MCP response…</p> : null}
+          {selectedToolRun?.succeeded ? <p className="text-xs text-emerald-700">Last run succeeded for this tool.</p> : null}
+          {selectedToolRun && !selectedToolRun.succeeded ? <p className="text-xs text-red-700">Last run failed for this tool. Check fallback output and error details.</p> : null}
         </Card>
 
         <Card className="col-span-4 grid grid-rows-2 gap-3 p-3">
           <div className="min-h-0 space-y-3 overflow-auto">
             <div>
               <h3 className="mb-2 text-sm font-semibold">Fallback result</h3>
-              <ResultFallbackView result={selectedToolRun?.result ?? { message: "Run a tool to see result" }} />
+              <ResultFallbackView result={latestResult} />
             </div>
             {shouldRenderWidget(selectedTool, selectedToolRun) ? (
               <div>
                 <h3 className="mb-2 text-sm font-semibold">Embedded widget</h3>
+                {widgetStatus === "loading" ? <p className="mb-2 text-xs text-slate-600">Loading widget resource…</p> : null}
+                {widgetStatus === "success" ? <p className="mb-2 text-xs text-emerald-700">Widget rendered successfully.</p> : null}
                 {widgetError ? (
-                  <div className="rounded-md bg-amber-100 p-2 text-xs text-amber-800">
-                    Widget error: {widgetError}. Fallback results remain available.
+                  <div className="mb-2 rounded-md bg-amber-100 p-2 text-xs text-amber-800">
+                    Widget failed: {widgetError}. Fallback results remain available.
                   </div>
                 ) : null}
                 <ToolWidgetRenderer
@@ -319,11 +398,14 @@ export function HostShell() {
                   toolResult={selectedToolRun.result}
                   resourceUri={selectedTool.uiBinding.resourceUri}
                   onError={setWidgetError}
+                  onStatusChange={setWidgetStatus}
                 />
               </div>
             ) : selectedTool && isUiCapableTool(selectedTool) ? (
-              <p className="text-xs text-slate-500">Run this tool successfully to render its embedded widget.</p>
-            ) : null}
+              <p className="text-xs text-slate-500">Run this UI-capable tool successfully to render its embedded widget.</p>
+            ) : (
+              <p className="text-xs text-slate-500">Selected tool does not expose embedded UI. Use fallback results.</p>
+            )}
           </div>
           <div className="min-h-0 overflow-auto">
             <h3 className="mb-2 text-sm font-semibold">Run history</h3>
@@ -338,7 +420,7 @@ export function HostShell() {
                   <div className="truncate text-slate-500">{run.inputSummary}</div>
                 </div>
               ))}
-              {runHistory.length === 0 && <p className="text-xs text-slate-500">No runs yet.</p>}
+              {runHistory.length === 0 ? <p className="text-xs text-slate-500">No runs yet. Run a tool to populate local history.</p> : null}
             </div>
           </div>
         </Card>

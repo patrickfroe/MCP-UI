@@ -7,6 +7,8 @@ import { hostClient } from "@/lib/host-client";
 
 const AppRenderer = (MCPUIClient as Record<string, React.ComponentType<any>>).AppRenderer;
 
+export type WidgetRenderStatus = "idle" | "loading" | "success" | "error";
+
 interface ToolWidgetRendererProps {
   toolName: string;
   toolInput: Record<string, unknown>;
@@ -14,6 +16,7 @@ interface ToolWidgetRendererProps {
   resourceUri: string;
   sandboxProxyUrl?: string;
   onError?: (message: string) => void;
+  onStatusChange?: (status: WidgetRenderStatus) => void;
 }
 
 export function ToolWidgetRenderer({
@@ -23,15 +26,30 @@ export function ToolWidgetRenderer({
   resourceUri,
   sandboxProxyUrl = "/sandbox-proxy.html",
   onError,
+  onStatusChange,
 }: ToolWidgetRendererProps) {
   const [resourceText, setResourceText] = React.useState<string | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
+    if (!AppRenderer) {
+      onStatusChange?.("error");
+      onError?.("@mcp-ui/client AppRenderer is unavailable.");
+    }
+  }, [onError, onStatusChange]);
+
+  React.useEffect(() => {
     let alive = true;
+
+    if (!AppRenderer) {
+      return () => {
+        alive = false;
+      };
+    }
 
     setResourceText(null);
     setLoadError(null);
+    onStatusChange?.("loading");
 
     void (async () => {
       try {
@@ -50,6 +68,7 @@ export function ToolWidgetRenderer({
         }
         const message = error instanceof Error ? error.message : "Failed to load widget resource.";
         setLoadError(message);
+        onStatusChange?.("error");
         onError?.(message);
       }
     })();
@@ -57,7 +76,7 @@ export function ToolWidgetRenderer({
     return () => {
       alive = false;
     };
-  }, [resourceUri, onError]);
+  }, [resourceUri, onError, onStatusChange]);
 
   if (!AppRenderer) {
     return <Card className="p-3 text-sm text-red-600">@mcp-ui/client AppRenderer is unavailable.</Card>;
@@ -96,12 +115,18 @@ export function ToolWidgetRenderer({
           ) {
             const nextUri = String((message as { resourceUri: unknown }).resourceUri);
             void hostClient.readResource(nextUri).catch((error) => {
-              onError?.(error instanceof Error ? error.message : "Widget resource.read failed.");
+              const messageText = error instanceof Error ? error.message : "Widget resource.read failed.";
+              onStatusChange?.("error");
+              onError?.(messageText);
             });
           }
         }}
         onError={(error: unknown) => {
+          onStatusChange?.("error");
           onError?.(error instanceof Error ? error.message : "Widget render error.");
+        }}
+        onLoad={() => {
+          onStatusChange?.("success");
         }}
         host={{
           readResource: (nextUri: string) => hostClient.readResource(nextUri),
