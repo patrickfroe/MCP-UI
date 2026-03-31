@@ -85,6 +85,27 @@ test("stdio invalid command maps structured PROCESS_START_FAILED error", async (
   );
 });
 
+test("stdio config validation rejects invalid stdio config fields", async () => {
+  const adapter = new MCPHostRuntime();
+  await assert.rejects(
+    () => adapter.connect({ type: "stdio", command: "   ", args: [] }),
+    (error: unknown) => {
+      const mapped = toMCPHostError(error, "INTERNAL_ERROR");
+      assert.equal(mapped.code, "BAD_REQUEST");
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    () => adapter.connect({ type: "stdio", command: process.execPath, startupTimeoutMs: 0 }),
+    (error: unknown) => {
+      const mapped = toMCPHostError(error, "INTERNAL_ERROR");
+      assert.equal(mapped.code, "BAD_REQUEST");
+      return true;
+    },
+  );
+});
+
 test("stdio startup timeout maps STARTUP_TIMEOUT error", async () => {
   const adapter = new MCPHostRuntime();
   const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
@@ -126,5 +147,97 @@ test("stdio reconnect replaces previous session and handles unexpected exit", as
     assert.equal(mapped.code, "PROCESS_EXITED");
     return true;
   });
+  await adapter.disconnect();
+});
+
+test("stdio request timeout maps REQUEST_TIMEOUT after successful startup", async () => {
+  const adapter = new MCPHostRuntime();
+  const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
+  await adapter.connect({
+    type: "stdio",
+    command: process.execPath,
+    args: ["--import", "tsx", serverScript],
+    env: { MCP_STDIO_DELAY_TOOLS_MS: "2000" },
+    requestTimeoutMs: 20,
+  });
+
+  await assert.rejects(() => adapter.listTools(), (error: unknown) => {
+    const mapped = toMCPHostError(error, "INTERNAL_ERROR");
+    assert.equal(mapped.code, "REQUEST_TIMEOUT");
+    return true;
+  });
+  await adapter.disconnect();
+});
+
+test("stdio diagnostics bound stderr and avoid env value leakage", async () => {
+  const adapter = new MCPHostRuntime();
+  const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
+  await assert.rejects(
+    () =>
+      adapter.connect({
+        type: "stdio",
+        command: process.execPath,
+        args: ["--import", "tsx", serverScript],
+        env: { MCP_STDIO_SPAM_STDERR_LINES: "120", MCP_STDIO_EXIT_ON_MESSAGE: "1", SECRET_TOKEN: "top-secret" },
+      }),
+    () => true,
+  );
+  const processInfo = adapter.status().process;
+  assert.ok((processInfo?.stderrTail?.length ?? 0) <= 40);
+  assert.ok((processInfo?.envKeys ?? []).includes("SECRET_TOKEN"));
+  assert.equal(JSON.stringify(processInfo).includes("top-secret"), false);
+  await adapter.disconnect();
+});
+
+test("stdio malformed response maps MCP_PROTOCOL_ERROR and marks connection errored", async () => {
+  const adapter = new MCPHostRuntime();
+  const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
+  await assert.rejects(
+    () =>
+      adapter.connect({
+        type: "stdio",
+        command: process.execPath,
+        args: ["--import", "tsx", serverScript],
+        env: { MCP_STDIO_MALFORMED_RESPONSE: "1" },
+      }),
+    (error: unknown) => {
+      const mapped = toMCPHostError(error, "INTERNAL_ERROR");
+      assert.equal(mapped.code, "MCP_PROTOCOL_ERROR");
+      return true;
+    },
+  );
+  assert.equal(adapter.status().status, "error");
+  assert.ok((adapter.status().process?.malformedResponseCount ?? 0) > 0);
+});
+
+test("stdio repeated connect/disconnect cycles do not leak active process state", async () => {
+  const adapter = new MCPHostRuntime();
+  const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
+  for (let i = 0; i < 3; i += 1) {
+    await adapter.connect({ type: "stdio", command: process.execPath, args: ["--import", "tsx", serverScript] });
+    assert.equal(adapter.status().status, "connected");
+    await adapter.disconnect();
+    assert.equal(adapter.status().status, "disconnected");
+    assert.equal(adapter.status().process, undefined);
+  }
+});
+
+test("stdio reconnect succeeds cleanly after failed startup", async () => {
+  const adapter = new MCPHostRuntime();
+  const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
+  await assert.rejects(
+    () =>
+      adapter.connect({
+        type: "stdio",
+        command: process.execPath,
+        args: ["--import", "tsx", serverScript],
+        startupTimeoutMs: 10,
+        env: { MCP_STDIO_DELAY_INIT_MS: "1000" },
+      }),
+    () => true,
+  );
+  assert.notEqual(adapter.status().status, "connected");
+  await adapter.connect({ type: "stdio", command: process.execPath, args: ["--import", "tsx", serverScript] });
+  assert.equal(adapter.status().status, "connected");
   await adapter.disconnect();
 });

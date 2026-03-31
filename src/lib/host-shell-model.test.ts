@@ -62,6 +62,36 @@ test("connection form model switches transport fields and validates command/url"
   assert.deepEqual(parseEnvText("A=1\nB=two"), { A: "1", B: "two" });
 });
 
+test("transport switch preserves only intended fields across HTTP and STDIO", () => {
+  const stdioConfig = buildConnectionConfig("stdio", "http://unused", {
+    command: "node",
+    argsText: "server.js",
+    cwd: "/workspace/MCP-UI",
+    envText: "A=1",
+  });
+  assert.equal(stdioConfig.type, "stdio");
+  assert.equal("url" in stdioConfig, false);
+
+  const httpConfig = buildConnectionConfig("streamable-http", "http://localhost:3001/mcp", {
+    command: "node",
+    argsText: "server.js",
+    cwd: "/workspace/MCP-UI",
+    envText: "A=1",
+  });
+  assert.equal(httpConfig.type, "streamable-http");
+  assert.equal("command" in httpConfig, false);
+});
+
+test("stdio validation messaging is actionable for missing required fields", () => {
+  const missingCommand = buildConnectionConfig("stdio", "", {
+    command: "",
+    argsText: "--stdio",
+    cwd: "",
+    envText: "TOKEN=abc",
+  });
+  assert.equal(validateConnectionConfig(missingCommand), "Command is required for local STDIO transport.");
+});
+
 test("run history metadata includes tool name/status/timestamp/input summary", () => {
   const history = createRunHistoryItem({
     id: "run-1",

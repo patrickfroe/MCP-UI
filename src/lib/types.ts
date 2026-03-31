@@ -39,10 +39,12 @@ export interface MCPServerConnection {
     pid?: number;
     command?: string;
     args?: string[];
+    envKeys?: string[];
     exited?: boolean;
     exitCode?: number | null;
     signal?: NodeJS.Signals | null;
     stderrTail?: string[];
+    malformedResponseCount?: number;
   };
   raw?: unknown;
 }

@@ -16,7 +16,15 @@ import {
   shouldRenderWidget,
   validateToolArgs,
 } from "@/lib/tool-execution";
-import { createRunHistoryItem, filterTools, getNextSelectionState, serializeFallbackResult, type RunHistoryItem } from "@/lib/host-shell-model";
+import {
+  buildConnectionConfig,
+  createRunHistoryItem,
+  filterTools,
+  getNextSelectionState,
+  serializeFallbackResult,
+  type RunHistoryItem,
+  validateConnectionConfig,
+} from "@/lib/host-shell-model";
 
 const DEFAULT_SERVER_URL = "http://localhost:3001/mcp";
 
@@ -99,27 +107,19 @@ export function HostShell() {
     void loadConnectionStatus();
   }, []);
 
-  const parseEnv = () => Object.fromEntries(stdioEnvText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const idx = line.indexOf("=");
-    return idx === -1 ? [line, ""] : [line.slice(0, idx), line.slice(idx + 1)];
-  }));
-
-  const buildConfig = (): MCPServerConfig => transport === "stdio" ? {
-    type: "stdio",
-    command: stdioCommand,
-    args: stdioArgs.trim() ? stdioArgs.split(" ").filter(Boolean) : [],
-    cwd: stdioCwd.trim() || undefined,
-    env: stdioEnvText.trim() ? parseEnv() : undefined,
-  } : { type: "streamable-http", url: serverUrl };
+  const buildConfig = (): MCPServerConfig =>
+    buildConnectionConfig(transport, serverUrl, {
+      command: stdioCommand,
+      argsText: stdioArgs,
+      cwd: stdioCwd,
+      envText: stdioEnvText,
+    });
 
   const connectAndLoadTools = async () => {
     const config = buildConfig();
-    if (config.type === "streamable-http" && !config.url.trim()) {
-      setError("No server configured. Enter a streamable HTTP MCP URL before connecting.");
-      return;
-    }
-    if (config.type === "stdio" && !config.command.trim()) {
-      setError("Command is required for local STDIO transport.");
+    const validationError = validateConnectionConfig(config);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -142,7 +142,7 @@ export function HostShell() {
       setConnectionStatus("error");
       const message = err instanceof Error ? err.message : "Failed to connect to MCP server";
       setError(message);
-      setDebugInfo(message.includes("PROCESS") ? "Check command, cwd, and env values." : null);
+      setDebugInfo(message.includes("PROCESS") || message.includes("TIMEOUT") ? "Check command, args, cwd, and timeout values." : null);
     }
   };
 
@@ -231,7 +231,7 @@ export function HostShell() {
         <p className="mt-2 text-xs text-slate-600">
           {connectionStatus === "connected" && "Connected. Tools are ready to run."}
           {connectionStatus === "connecting" && `Connecting via ${transport === "stdio" ? "local STDIO" : "streamable HTTP"}…`}
-          {connectionStatus === "error" && "Connection failed. Check transport settings and server availability."}
+          {connectionStatus === "error" && `Connection failed (${transport === "stdio" ? "Local STDIO" : "Streamable HTTP"}). Check settings and diagnostics.`}
           {connectionStatus === "disconnected" && "Not connected yet. Connect to load tools."}
         </p>
         {debugInfo ? <pre className="mt-2 max-h-24 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-700">{debugInfo}</pre> : null}

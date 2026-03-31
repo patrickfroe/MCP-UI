@@ -16,6 +16,54 @@ interface InitializeResult {
   serverInfo?: { name?: string; version?: string; instructions?: string };
 }
 
+interface StdioConfigValidationResult {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  startupTimeoutMs: number;
+  requestTimeoutMs: number;
+}
+
+function validateStdioConfig(config: Extract<MCPServerConfig, { type: "stdio" }>): StdioConfigValidationResult {
+  const command = config.command?.trim() ?? "";
+  if (!command) {
+    throw new MCPAdapterError("BAD_REQUEST", "Invalid stdio config: command is required.");
+  }
+
+  if (Array.isArray(config.args) && config.args.some((arg) => typeof arg !== "string")) {
+    throw new MCPAdapterError("BAD_REQUEST", "Invalid stdio config: args must be an array of strings.");
+  }
+  const args = (config.args ?? []).map((arg) => arg.trim()).filter(Boolean);
+
+  if (config.cwd !== undefined && !config.cwd.trim()) {
+    throw new MCPAdapterError("BAD_REQUEST", "Invalid stdio config: cwd cannot be empty when provided.");
+  }
+
+  if (config.env && Object.entries(config.env).some(([k, v]) => !k.trim() || typeof v !== "string")) {
+    throw new MCPAdapterError("BAD_REQUEST", "Invalid stdio config: env keys must be non-empty and values must be strings.");
+  }
+
+  const startupTimeoutMs = config.startupTimeoutMs ?? 7_000;
+  if (!Number.isFinite(startupTimeoutMs) || startupTimeoutMs <= 0) {
+    throw new MCPAdapterError("BAD_REQUEST", "Invalid stdio config: startupTimeoutMs must be a positive number.");
+  }
+
+  const requestTimeoutMs = config.requestTimeoutMs ?? 15_000;
+  if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new MCPAdapterError("BAD_REQUEST", "Invalid stdio config: requestTimeoutMs must be a positive number.");
+  }
+
+  return {
+    command,
+    args,
+    cwd: config.cwd?.trim() || undefined,
+    env: config.env,
+    startupTimeoutMs,
+    requestTimeoutMs,
+  };
+}
+
 class HttpHostAdapter implements MCPHostAdapter {
   private connection: MCPServerConnection = {
     id: "single-server",
@@ -138,17 +186,20 @@ class StdioSession {
   private exitInfo: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   private stderrTail: string[] = [];
   private readonly maxStderrLines = 40;
+  private readonly validatedConfig: StdioConfigValidationResult;
+  private malformedResponseCount = 0;
+  private requestIndex = 0;
 
-  constructor(private readonly config: Extract<MCPServerConfig, { type: "stdio" }>) {}
+  constructor(
+    private readonly config: Extract<MCPServerConfig, { type: "stdio" }>,
+    private readonly onTerminated: (error: MCPAdapterError) => void,
+  ) {
+    this.validatedConfig = validateStdioConfig(config);
+  }
 
   async start(): Promise<{ serverInfo?: InitializeResult["serverInfo"]; pid?: number }> {
-    const command = this.config.command?.trim();
-    if (!command) {
-      throw new MCPAdapterError("BAD_REQUEST", "command is required for stdio transport");
-    }
-
-    const child = spawn(command, this.config.args ?? [], {
-      cwd: this.config.cwd,
+    const child = spawn(this.validatedConfig.command, this.validatedConfig.args, {
+      cwd: this.validatedConfig.cwd,
       env: this.buildEnv() as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
@@ -166,19 +217,31 @@ class StdioSession {
     child.stdout?.on("data", (chunk: Buffer | string) => this.consume(String(chunk)));
     child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       this.exitInfo = { code, signal };
+      const error = new MCPAdapterError("PROCESS_EXITED", "STDIO process exited unexpectedly.", {
+        code,
+        signal,
+        stderrTail: this.stderrTail,
+      });
       for (const [id, pending] of this.pending) {
-        pending.reject(new MCPAdapterError("PROCESS_EXITED", "STDIO process exited unexpectedly", { id, code, signal, stderrTail: this.stderrTail }));
+        pending.reject(new MCPAdapterError("PROCESS_EXITED", "STDIO process exited unexpectedly.", { id, code, signal, stderrTail: this.stderrTail }));
       }
       this.pending.clear();
+      this.onTerminated(error);
     });
     child.on("error", (error: Error) => {
+      const mapped = new MCPAdapterError("PROCESS_START_FAILED", `Unable to launch stdio command "${this.validatedConfig.command}": ${error.message}`, {
+        command: this.validatedConfig.command,
+        args: this.validatedConfig.args,
+        stderrTail: this.stderrTail,
+      });
       for (const [, pending] of this.pending) {
-        pending.reject(new MCPAdapterError("PROCESS_START_FAILED", `Unable to launch stdio command: ${error.message}`, { stderrTail: this.stderrTail }));
+        pending.reject(mapped);
       }
       this.pending.clear();
+      this.onTerminated(mapped);
     });
 
-    const startupTimeoutMs = this.config.startupTimeoutMs ?? 7_000;
+    const startupTimeoutMs = this.validatedConfig.startupTimeoutMs;
     const init = await this.request("initialize", {
       protocolVersion: "2025-03-26",
       capabilities: {},
@@ -190,20 +253,31 @@ class StdioSession {
 
   async request(method: string, params: Record<string, unknown>, timeoutMs?: number, timeoutCode: "REQUEST_TIMEOUT" | "STARTUP_TIMEOUT" = "REQUEST_TIMEOUT") {
     const child = this.ensureRunning();
-    const id = crypto.randomUUID();
+    const id = `stdio-${this.requestIndex++}`;
     const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params });
     const frame = `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
 
     const promise = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new MCPAdapterError(timeoutCode, `${method} timed out`, { timeoutMs: timeoutMs ?? this.config.requestTimeoutMs ?? 15000 }));
-      }, timeoutMs ?? this.config.requestTimeoutMs ?? 15_000);
+        reject(new MCPAdapterError(timeoutCode, `${method} timed out`, { timeoutMs: timeoutMs ?? this.validatedConfig.requestTimeoutMs }));
+      }, timeoutMs ?? this.validatedConfig.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
     });
 
     if (!child.stdin) { throw new MCPAdapterError("PROCESS_EXITED", "STDIO stdin is unavailable"); }
-    child.stdin.write(frame);
+    child.stdin.write(frame, (error) => {
+      if (!error) return;
+      const pending = this.pending.get(id);
+      if (!pending) return;
+      this.pending.delete(id);
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(new MCPAdapterError("PROCESS_EXITED", `Failed to write ${method} request to stdio process.`, {
+        method,
+        error: error.message,
+        stderrTail: this.stderrTail,
+      }));
+    });
     return promise;
   }
 
@@ -233,12 +307,14 @@ class StdioSession {
   diagnostics() {
     return {
       pid: this.process?.pid,
-      command: this.config.command,
-      args: this.config.args ?? [],
+      command: this.validatedConfig.command,
+      args: this.validatedConfig.args,
+      envKeys: Object.keys(this.validatedConfig.env ?? {}),
       exited: Boolean(this.exitInfo),
       exitCode: this.exitInfo?.code ?? null,
       signal: this.exitInfo?.signal ?? null,
       stderrTail: [...this.stderrTail],
+      malformedResponseCount: this.malformedResponseCount,
     };
   }
 
@@ -249,7 +325,7 @@ class StdioSession {
         base[k] = v;
       }
     }
-    return { ...base, ...(this.config.env ?? {}) };
+    return { ...base, ...(this.validatedConfig.env ?? {}) };
   }
 
   private ensureRunning() {
@@ -300,7 +376,16 @@ class StdioSession {
       }
       pending.resolve(payload.result);
     } catch {
-      // ignore malformed chunk
+      this.malformedResponseCount += 1;
+      const error = new MCPAdapterError("MCP_PROTOCOL_ERROR", "Malformed JSON-RPC response from stdio server.", {
+        malformedResponseCount: this.malformedResponseCount,
+        stderrTail: this.stderrTail,
+      });
+      for (const [, pending] of this.pending) {
+        if (pending.timer) clearTimeout(pending.timer);
+        pending.reject(error);
+      }
+      this.pending.clear();
     }
   }
 }
@@ -314,6 +399,16 @@ class StdioHostAdapter implements MCPHostAdapter {
   };
   private session: StdioSession | null = null;
   private runs: MCPToolRun[] = [];
+  private activeSessionToken = 0;
+  private buildSessionTerminatedError(session: StdioSession, error: MCPAdapterError) {
+    if (this.session !== session) return;
+    this.connection = {
+      ...this.connection,
+      status: "error",
+      lastError: error.toJSON(),
+      process: session.diagnostics(),
+    };
+  }
 
   async connect(config: MCPServerConfig): Promise<MCPServerConnection> {
     if (config.type !== "stdio") {
@@ -332,7 +427,11 @@ class StdioHostAdapter implements MCPHostAdapter {
       process: undefined,
     };
 
-    const session = new StdioSession(config);
+    const token = ++this.activeSessionToken;
+    const session = new StdioSession(config, (error) => {
+      if (token !== this.activeSessionToken) return;
+      this.buildSessionTerminatedError(session, error);
+    });
     this.session = session;
 
     try {
@@ -347,15 +446,18 @@ class StdioHostAdapter implements MCPHostAdapter {
       };
       return this.connection;
     } catch (error) {
+      const mapped = error instanceof MCPAdapterError
+        ? error
+        : new MCPAdapterError("CONNECTION_FAILED", "Failed to connect stdio server.", error);
       this.connection = {
         ...this.connection,
         status: "error",
-        lastError: error instanceof MCPAdapterError ? error.toJSON() : { code: "CONNECTION_FAILED", message: "Failed to connect stdio server" },
+        lastError: mapped.toJSON(),
         process: session.diagnostics(),
       };
       await session.stop();
       this.session = null;
-      throw error;
+      throw mapped;
     }
   }
 
@@ -392,11 +494,12 @@ class StdioHostAdapter implements MCPHostAdapter {
   }
 
   async disconnect(): Promise<MCPServerConnection> {
+    this.activeSessionToken += 1;
     if (this.session) {
       await this.session.stop();
       this.session = null;
     }
-    this.connection = { ...this.connection, status: "disconnected", connectedAt: undefined };
+    this.connection = { ...this.connection, status: "disconnected", connectedAt: undefined, process: undefined };
     return this.connection;
   }
 

@@ -26,6 +26,12 @@ function sendError(id: string, message: string) {
 
 function handleMessage(raw: string) {
   const msg = JSON.parse(raw) as { id: string; method: string; params?: Record<string, unknown> };
+  if (process.env.MCP_STDIO_SPAM_STDERR_LINES) {
+    const count = Number(process.env.MCP_STDIO_SPAM_STDERR_LINES);
+    for (let i = 0; i < count; i += 1) {
+      process.stderr.write(`stderr-${i}\n`);
+    }
+  }
   if (process.env.MCP_STDIO_EXIT_ON_MESSAGE === "1") {
     process.stderr.write("intentional exit\n");
     process.exit(17);
@@ -39,6 +45,10 @@ function handleMessage(raw: string) {
     return;
   }
   if (msg.method === "tools/list") {
+    if (process.env.MCP_STDIO_DELAY_TOOLS_MS) {
+      setTimeout(() => send(msg.id, { tools }), Number(process.env.MCP_STDIO_DELAY_TOOLS_MS));
+      return;
+    }
     send(msg.id, { tools });
     return;
   }
@@ -54,6 +64,10 @@ function handleMessage(raw: string) {
 }
 
 process.stdin.on("data", (chunk) => {
+  if (process.env.MCP_STDIO_MALFORMED_RESPONSE === "1") {
+    process.stdout.write("Content-Length: 4\r\n\r\nNOPE");
+    return;
+  }
   buffer += String(chunk);
   while (true) {
     const headerEnd = buffer.indexOf("\r\n\r\n");
