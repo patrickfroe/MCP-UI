@@ -34,6 +34,7 @@ function ResultFallbackView({ result }: { result: unknown }) {
   const [showRawJson, setShowRawJson] = useState(false);
   const [copied, setCopied] = useState(false);
   const serialized = useMemo(() => serializeFallbackResult(result), [result]);
+
   const copyResult = async () => {
     try {
       await navigator.clipboard.writeText(serialized.pretty);
@@ -55,6 +56,9 @@ export function HostShell() {
   const [connectionStatus, setConnectionStatus] = useState<MCPConnectionStatus>("disconnected");
   const [transport, setTransport] = useState<MCPTransportType>("streamable-http");
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
+  const [httpHeadersText, setHttpHeadersText] = useState("");
+  const [httpAuthToken, setHttpAuthToken] = useState("");
+  const [httpRequestTimeoutMs, setHttpRequestTimeoutMs] = useState("");
   const [stdioCommand, setStdioCommand] = useState("");
   const [stdioArgs, setStdioArgs] = useState("");
   const [stdioCwd, setStdioCwd] = useState("");
@@ -86,22 +90,27 @@ export function HostShell() {
       const { connection } = await hostClient.status();
       setConnectionStatus(connection.status);
       setTransport(connection.transport);
+
       if (connection.transport === "streamable-http") {
         setServerUrl(connection.baseUrl || DEFAULT_SERVER_URL);
       }
+
       if (connection.transport === "stdio") {
         setStdioCommand(connection.process?.command ?? "");
         setStdioArgs((connection.process?.args ?? []).join(" "));
         setDebugInfo(connection.process?.stderrTail?.join("\n") ?? null);
       }
+
       if (connection.status === "error") {
         const details = connection.lastError?.message ?? "Connection moved to an error state.";
         setError(`Connection dropped (${getTransportLabel(connection.transport)}): ${details}`);
       }
+
       if (connection.status === "disconnected") {
         setTools([]);
         setSelectedToolName(null);
       }
+
       if (connection.status === "connected") {
         const toolData = await hostClient.listTools();
         setTools(toolData.tools);
@@ -109,8 +118,10 @@ export function HostShell() {
         setSelectedToolName(next.selectedToolName);
         setArgs(next.args);
       }
-    } catch {
-      setConnectionStatus("disconnected");
+    } catch (err) {
+      setConnectionStatus("error");
+      const message = err instanceof Error ? err.message : "Unable to refresh connection status.";
+      setError(`Status check failed: ${message}`);
     }
   };
 
@@ -127,12 +138,21 @@ export function HostShell() {
   }, [isConnected]);
 
   const buildConfig = (): MCPServerConfig =>
-    buildConnectionConfig(transport, serverUrl, {
-      command: stdioCommand,
-      argsText: stdioArgs,
-      cwd: stdioCwd,
-      envText: stdioEnvText,
-    });
+    buildConnectionConfig(
+      transport,
+      serverUrl,
+      {
+        command: stdioCommand,
+        argsText: stdioArgs,
+        cwd: stdioCwd,
+        envText: stdioEnvText,
+      },
+      {
+        headersText: httpHeadersText,
+        authToken: httpAuthToken,
+        requestTimeoutMsText: httpRequestTimeoutMs,
+      },
+    );
 
   const connectAndLoadTools = async () => {
     const config = buildConfig();
@@ -246,9 +266,24 @@ export function HostShell() {
               <option value="stdio">Local STDIO</option>
             </select>
           </div>
-          {transport === "streamable-http" ? <div className="col-span-7"><label htmlFor="server-url" className="text-xs font-medium text-slate-700">MCP server URL</label><Input id="server-url" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="http://localhost:3001/mcp" /></div> : <><div className="col-span-4"><label htmlFor="stdio-command" className="text-xs font-medium text-slate-700">Command</label><Input id="stdio-command" value={stdioCommand} onChange={(event) => setStdioCommand(event.target.value)} placeholder="node" /></div><div className="col-span-3"><label htmlFor="stdio-args" className="text-xs font-medium text-slate-700">Args</label><Input id="stdio-args" value={stdioArgs} onChange={(event) => setStdioArgs(event.target.value)} placeholder="server.js --stdio" /></div><div className="col-span-2"><label htmlFor="stdio-cwd" className="text-xs font-medium text-slate-700">cwd</label><Input id="stdio-cwd" value={stdioCwd} onChange={(event) => setStdioCwd(event.target.value)} placeholder="/workspace" /></div><div className="col-span-3"><label htmlFor="stdio-env" className="text-xs font-medium text-slate-700">env (KEY=VALUE per line)</label><Textarea id="stdio-env" rows={1} value={stdioEnvText} onChange={(event) => setStdioEnvText(event.target.value)} placeholder="FOO=bar" /></div></>}
-          <div className="col-span-2 flex items-end gap-2">
+          {transport === "streamable-http" ? (
+            <>
+              <div className="col-span-4"><label htmlFor="server-url" className="text-xs font-medium text-slate-700">MCP server URL</label><Input id="server-url" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="http://localhost:3001/mcp" /></div>
+              <div className="col-span-3"><label htmlFor="http-auth-token" className="text-xs font-medium text-slate-700">Bearer token (optional)</label><Input id="http-auth-token" type="password" value={httpAuthToken} onChange={(event) => setHttpAuthToken(event.target.value)} placeholder="token" /></div>
+              <div className="col-span-2"><label htmlFor="http-timeout" className="text-xs font-medium text-slate-700">Timeout ms (optional)</label><Input id="http-timeout" value={httpRequestTimeoutMs} onChange={(event) => setHttpRequestTimeoutMs(event.target.value)} placeholder="15000" /></div>
+              <div className="col-span-8"><label htmlFor="http-headers" className="text-xs font-medium text-slate-700">Headers (Header: value per line)</label><Textarea id="http-headers" rows={1} value={httpHeadersText} onChange={(event) => setHttpHeadersText(event.target.value)} placeholder="X-API-Key: abc123" /></div>
+            </>
+          ) : (
+            <>
+              <div className="col-span-4"><label htmlFor="stdio-command" className="text-xs font-medium text-slate-700">Command</label><Input id="stdio-command" value={stdioCommand} onChange={(event) => setStdioCommand(event.target.value)} placeholder="node" /></div>
+              <div className="col-span-3"><label htmlFor="stdio-args" className="text-xs font-medium text-slate-700">Args</label><Input id="stdio-args" value={stdioArgs} onChange={(event) => setStdioArgs(event.target.value)} placeholder="server.js --stdio" /></div>
+              <div className="col-span-2"><label htmlFor="stdio-cwd" className="text-xs font-medium text-slate-700">cwd</label><Input id="stdio-cwd" value={stdioCwd} onChange={(event) => setStdioCwd(event.target.value)} placeholder="/workspace" /></div>
+              <div className="col-span-3"><label htmlFor="stdio-env" className="text-xs font-medium text-slate-700">env (KEY=VALUE per line)</label><Textarea id="stdio-env" rows={1} value={stdioEnvText} onChange={(event) => setStdioEnvText(event.target.value)} placeholder="FOO=bar" /></div>
+            </>
+          )}
+          <div className="col-span-12 flex items-end gap-2">
             <Button onClick={() => void connectAndLoadTools()} disabled={!canConnect}>{isConnecting ? "Connecting…" : "Connect"}</Button>
+            <Button className="bg-slate-50" onClick={() => void connectAndLoadTools()} disabled={isConnecting}>Reconnect</Button>
             <Button className="bg-slate-50" onClick={() => void disconnect()} disabled={!isConnected}>Disconnect</Button>
           </div>
         </div>

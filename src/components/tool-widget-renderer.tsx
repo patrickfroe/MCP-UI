@@ -32,6 +32,19 @@ export function ToolWidgetRenderer({
   const [resourceText, setResourceText] = React.useState<string | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
 
+  const readResource = React.useCallback(async (nextUri: string) => {
+    const data = await hostClient.readResource(nextUri);
+    const text = data.text ?? data.blob;
+    if (!text) {
+      throw new Error(`Widget resource ${nextUri} is empty.`);
+    }
+    return data;
+  }, []);
+
+  const callTool = React.useCallback((nextToolName: string, args: Record<string, unknown>) => {
+    return hostClient.callTool(nextToolName, args);
+  }, []);
+
   React.useEffect(() => {
     if (!AppRenderer) {
       onStatusChange?.("error");
@@ -54,15 +67,11 @@ export function ToolWidgetRenderer({
 
     void (async () => {
       try {
-        const data = await hostClient.readResource(resourceUri);
+        const data = await readResource(resourceUri);
         if (!alive) {
           return;
         }
-        const text = data.text ?? data.blob;
-        if (!text) {
-          throw new Error("Widget resource is empty.");
-        }
-        setResourceText(text);
+        setResourceText(data.text ?? data.blob ?? null);
       } catch (error) {
         if (!alive) {
           return;
@@ -77,7 +86,7 @@ export function ToolWidgetRenderer({
     return () => {
       alive = false;
     };
-  }, [resourceUri, onError, onStatusChange]);
+  }, [resourceUri, onError, onStatusChange, readResource]);
 
   if (!AppRenderer) {
     return <Card className="p-3 text-sm text-red-600">@mcp-ui/client AppRenderer is unavailable.</Card>;
@@ -101,22 +110,30 @@ export function ToolWidgetRenderer({
         toolName={toolName}
         toolInput={toolInput}
         toolResult={toolResult}
+        onReadResource={readResource}
+        onCallTool={callTool}
         onOpenLink={(url: string) => {
           if (typeof window !== "undefined") {
             window.open(url, "_blank", "noopener,noreferrer");
           }
         }}
         onMessage={(message: unknown) => {
-          if (
-            message &&
-            typeof message === "object" &&
-            "type" in message &&
-            (message as { type?: string }).type === "resource.read" &&
-            "resourceUri" in message
-          ) {
-            const nextUri = String((message as { resourceUri: unknown }).resourceUri);
-            void hostClient.readResource(nextUri).catch((error) => {
+          if (!message || typeof message !== "object" || !("type" in message)) {
+            return;
+          }
+
+          const typed = message as { type?: string; resourceUri?: unknown; toolName?: unknown; args?: unknown };
+          if (typed.type === "resource.read" && typed.resourceUri) {
+            void readResource(String(typed.resourceUri)).catch((error) => {
               const messageText = error instanceof Error ? error.message : "Widget resource.read failed.";
+              onStatusChange?.("error");
+              onError?.(messageText);
+            });
+          }
+
+          if (typed.type === "tool.call" && typed.toolName) {
+            void callTool(String(typed.toolName), (typed.args ?? {}) as Record<string, unknown>).catch((error) => {
+              const messageText = error instanceof Error ? error.message : "Widget tool.call failed.";
               onStatusChange?.("error");
               onError?.(messageText);
             });
@@ -130,8 +147,8 @@ export function ToolWidgetRenderer({
           onStatusChange?.("success");
         }}
         host={{
-          readResource: (nextUri: string) => hostClient.readResource(nextUri),
-          callTool: (nextToolName: string, args: Record<string, unknown>) => hostClient.callTool(nextToolName, args),
+          readResource,
+          callTool,
         }}
       />
     </Card>

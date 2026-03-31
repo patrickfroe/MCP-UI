@@ -481,6 +481,9 @@ class StdioHostAdapter implements MCPHostAdapter {
   }
 
   async callTool(toolName: string, args: Record<string, unknown>): Promise<MCPToolRun> {
+    if (!toolName.trim()) {
+      throw new MCPAdapterError("BAD_REQUEST", "toolName is required");
+    }
     const session = this.requireSession();
     try {
       const result = await session.request("tools/call", { name: toolName, arguments: args });
@@ -493,6 +496,9 @@ class StdioHostAdapter implements MCPHostAdapter {
   }
 
   async readResource(resourceUri: string): Promise<MCPResourceContents> {
+    if (!resourceUri.trim()) {
+      throw new MCPAdapterError("BAD_REQUEST", "resourceUri is required");
+    }
     const session = this.requireSession();
     try {
       const result = await session.request("resources/read", { uri: resourceUri });

@@ -65,36 +65,61 @@ export function normalizeTools(rawTools: unknown): MCPToolDescriptor[] {
   return rawTools.map(normalizeTool).filter((tool): tool is MCPToolDescriptor => Boolean(tool));
 }
 
+function detectToolRunError(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") {
+    return false;
+  }
+  const candidate = raw as { isError?: unknown; error?: unknown };
+  if (candidate.isError === true) {
+    return true;
+  }
+  return Boolean(candidate.error);
+}
+
 export function normalizeToolRun(toolName: string, args: Record<string, unknown>, raw: unknown): MCPToolRun {
+  const failed = detectToolRunError(raw);
   return {
     id: crypto.randomUUID(),
     toolName,
     args,
     result: raw,
-    succeeded: true,
+    succeeded: !failed,
     createdAt: new Date().toISOString(),
     raw,
   };
 }
 
 export function normalizeResource(resourceUri: string, raw: unknown): MCPResourceContents {
-  const resourceLike = raw as
-    | {
-        contents?: Array<{
-          mimeType?: string;
-          text?: string;
-          blob?: string;
-        }>;
-      }
-    | undefined;
+  if (!raw || typeof raw !== "object") {
+    throw new Error("Malformed resources/read response: expected an object payload.");
+  }
 
-  const first = resourceLike?.contents?.[0];
+  const resourceLike = raw as {
+    contents?: Array<{
+      mimeType?: string;
+      text?: string;
+      blob?: string;
+    }>;
+  };
+
+  if (!Array.isArray(resourceLike.contents) || resourceLike.contents.length === 0) {
+    throw new Error("Malformed resources/read response: missing contents array.");
+  }
+
+  const first = resourceLike.contents[0];
+  if (!first || typeof first !== "object") {
+    throw new Error("Malformed resources/read response: invalid first content item.");
+  }
+
+  if (typeof first.text !== "string" && typeof first.blob !== "string") {
+    throw new Error("Malformed resources/read response: first content must include text or blob.");
+  }
 
   return {
     resourceUri,
-    mimeType: first?.mimeType,
-    text: first?.text,
-    blob: first?.blob,
+    mimeType: first.mimeType,
+    text: first.text,
+    blob: first.blob,
     raw,
   };
 }
