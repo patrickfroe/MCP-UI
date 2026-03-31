@@ -4,9 +4,11 @@ import * as React from "react";
 import * as MCPUIClient from "@mcp-ui/client";
 import { Card } from "@/components/ui/card";
 import { hostClient } from "@/lib/host-client";
+import { parseWidgetBridgeMessage } from "@/lib/widget-bridge";
 
 type RendererProps = Record<string, unknown>;
 const AppRenderer = (MCPUIClient as unknown as Record<string, React.ComponentType<RendererProps>>).AppRenderer;
+const isShimRenderer = Boolean((MCPUIClient as unknown as { __MCP_UI_CLIENT_SHIM__?: boolean }).__MCP_UI_CLIENT_SHIM__);
 
 export type WidgetRenderStatus = "idle" | "loading" | "success" | "error";
 
@@ -102,6 +104,7 @@ export function ToolWidgetRenderer({
 
   return (
     <Card className="h-full min-h-40 overflow-hidden p-2">
+      {isShimRenderer ? <div className="mb-2 rounded bg-amber-100 p-2 text-xs text-amber-800">Using local @mcp-ui/client shim. Install the real package to render production widgets.</div> : null}
       <AppRenderer
         key={`${toolName}:${resourceUri}`}
         sandboxProxyUrl={sandboxProxyUrl}
@@ -118,21 +121,21 @@ export function ToolWidgetRenderer({
           }
         }}
         onMessage={(message: unknown) => {
-          if (!message || typeof message !== "object" || !("type" in message)) {
+          const action = parseWidgetBridgeMessage(message);
+          if (!action) {
             return;
           }
 
-          const typed = message as { type?: string; resourceUri?: unknown; toolName?: unknown; args?: unknown };
-          if (typed.type === "resource.read" && typed.resourceUri) {
-            void readResource(String(typed.resourceUri)).catch((error) => {
+          if (action.kind === "resource.read") {
+            void readResource(action.resourceUri).catch((error) => {
               const messageText = error instanceof Error ? error.message : "Widget resource.read failed.";
               onStatusChange?.("error");
               onError?.(messageText);
             });
           }
 
-          if (typed.type === "tool.call" && typed.toolName) {
-            void callTool(String(typed.toolName), (typed.args ?? {}) as Record<string, unknown>).catch((error) => {
+          if (action.kind === "tool.call") {
+            void callTool(action.toolName, action.args).catch((error) => {
               const messageText = error instanceof Error ? error.message : "Widget tool.call failed.";
               onStatusChange?.("error");
               onError?.(messageText);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { hostClient } from "@/lib/host-client";
 import type { MCPConnectionStatus, MCPServerConfig, MCPToolDescriptor, MCPToolRun, MCPTransportType } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -85,7 +85,7 @@ export function HostShell() {
   const filteredTools = useMemo(() => filterTools(tools, search), [search, tools]);
   const toolFields = useMemo(() => getInputFields(selectedTool), [selectedTool]);
 
-  const loadConnectionStatus = async () => {
+  const loadConnectionStatus = useCallback(async () => {
     try {
       const { connection } = await hostClient.status();
       setConnectionStatus(connection.status);
@@ -114,20 +114,23 @@ export function HostShell() {
       if (connection.status === "connected") {
         const toolData = await hostClient.listTools();
         setTools(toolData.tools);
-        const next = getNextSelectionState(toolData.tools, toolData.tools[0]?.name ?? null);
+        const preferredToolName = selectedToolName && toolData.tools.some((tool) => tool.name === selectedToolName)
+          ? selectedToolName
+          : toolData.tools[0]?.name ?? null;
+        const next = getNextSelectionState(toolData.tools, preferredToolName);
         setSelectedToolName(next.selectedToolName);
-        setArgs(next.args);
+        setArgs((currentArgs) => (preferredToolName === selectedToolName ? currentArgs : next.args));
       }
     } catch (err) {
       setConnectionStatus("error");
       const message = err instanceof Error ? err.message : "Unable to refresh connection status.";
       setError(`Status check failed: ${message}`);
     }
-  };
+  }, [selectedToolName]);
 
   useEffect(() => {
     void loadConnectionStatus();
-  }, []);
+  }, [loadConnectionStatus]);
 
   useEffect(() => {
     if (!isConnected) return;
@@ -135,7 +138,7 @@ export function HostShell() {
       void loadConnectionStatus();
     }, 4_000);
     return () => clearInterval(timer);
-  }, [isConnected]);
+  }, [isConnected, loadConnectionStatus]);
 
   const buildConfig = (): MCPServerConfig =>
     buildConnectionConfig(
@@ -170,9 +173,12 @@ export function HostShell() {
       const { connection } = await hostClient.connect(config);
       const toolData = await hostClient.listTools();
       setTools(toolData.tools);
-      const next = getNextSelectionState(toolData.tools, toolData.tools[0]?.name ?? null);
+      const preferredToolName = selectedToolName && toolData.tools.some((tool) => tool.name === selectedToolName)
+        ? selectedToolName
+        : toolData.tools[0]?.name ?? null;
+      const next = getNextSelectionState(toolData.tools, preferredToolName);
       setSelectedToolName(next.selectedToolName);
-      setArgs(next.args);
+      setArgs((currentArgs) => (preferredToolName === selectedToolName ? currentArgs : next.args));
       setConnectionStatus("connected");
       setDebugInfo(connection.process?.stderrTail?.join("\n") ?? null);
     } catch (err) {

@@ -16,6 +16,16 @@ interface InitializeResult {
   serverInfo?: { name?: string; version?: string; instructions?: string };
 }
 
+const HOST_CAPABILITIES = {
+  tools: {},
+  resources: {},
+  experimental: {
+    "mcp-ui": {
+      supportsResourceUriTemplates: true,
+    },
+  },
+} as const;
+
 interface StdioConfigValidationResult {
   command: string;
   args: string[];
@@ -110,7 +120,7 @@ class HttpHostAdapter implements MCPHostAdapter {
     try {
       const initializeResult = await this.transport.request<InitializeResult>("initialize", {
         protocolVersion: "2025-03-26",
-        capabilities: {},
+        capabilities: HOST_CAPABILITIES,
         clientInfo: { name: "mcp-ui-host-mvp", version: "0.1.0" },
       });
       this.connection = {
@@ -253,7 +263,7 @@ class StdioSession {
     const startupTimeoutMs = this.validatedConfig.startupTimeoutMs;
     const init = await this.request("initialize", {
       protocolVersion: "2025-03-26",
-      capabilities: {},
+      capabilities: HOST_CAPABILITIES,
       clientInfo: { name: "mcp-ui-host-mvp", version: "0.1.0" },
     }, startupTimeoutMs, "STARTUP_TIMEOUT") as InitializeResult;
 

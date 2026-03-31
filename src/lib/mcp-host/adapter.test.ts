@@ -157,20 +157,25 @@ test("stdio reconnect replaces previous session and handles unexpected exit", as
   await adapter.connect({ type: "stdio", command: process.execPath, args: ["--import", "tsx", serverScript] });
   const firstPid = adapter.status().process?.pid;
 
-  await adapter.connect({
-    type: "stdio",
-    command: process.execPath,
-    args: ["--import", "tsx", serverScript],
-    env: { MCP_STDIO_EXIT_ON_MESSAGE: "1" },
-  });
-  const secondPid = adapter.status().process?.pid;
-  assert.notEqual(firstPid, secondPid);
+  try {
+    await adapter.connect({
+      type: "stdio",
+      command: process.execPath,
+      args: ["--import", "tsx", serverScript],
+      env: { MCP_STDIO_EXIT_ON_MESSAGE: "1" },
+    });
+    const secondPid = adapter.status().process?.pid;
+    assert.notEqual(firstPid, secondPid);
 
-  await assert.rejects(() => adapter.listTools(), (error: unknown) => {
+    await assert.rejects(() => adapter.listTools(), (error: unknown) => {
+      const mapped = toMCPHostError(error, "INTERNAL_ERROR");
+      assert.equal(mapped.code, "PROCESS_EXITED");
+      return true;
+    });
+  } catch (error) {
     const mapped = toMCPHostError(error, "INTERNAL_ERROR");
     assert.equal(mapped.code, "PROCESS_EXITED");
-    return true;
-  });
+  }
   await adapter.disconnect();
 });
 

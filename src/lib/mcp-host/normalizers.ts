@@ -43,7 +43,7 @@ export function normalizeTool(raw: unknown): MCPToolDescriptor | null {
     return null;
   }
 
-  const uiBinding: MCPToolUIBinding | undefined = tool._meta?.ui?.resourceUri
+  const uiBinding: MCPToolUIBinding | undefined = typeof tool._meta?.ui?.resourceUri === "string" && tool._meta.ui.resourceUri
     ? { resourceUri: tool._meta.ui.resourceUri }
     : undefined;
 
