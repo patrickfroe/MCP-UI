@@ -14,4 +14,6 @@ function AppRenderer(props) {
   );
 }
 
-module.exports = { AppRenderer };
+const __MCP_UI_CLIENT_SHIM__ = true;
+
+module.exports = { AppRenderer, __MCP_UI_CLIENT_SHIM__ };

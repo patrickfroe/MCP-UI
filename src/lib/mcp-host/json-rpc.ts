@@ -18,6 +18,41 @@ interface JsonRpcFailure {
 
 type JsonRpcResponse<T> = JsonRpcSuccess<T> | JsonRpcFailure;
 
+function isJsonRpcPayload(value: unknown): value is JsonRpcResponse<unknown> {
+  return Boolean(value && typeof value === "object" && (("result" in value) || ("error" in value)));
+}
+
+function parseSseJsonRpc<T>(body: string, expectedId: string): JsonRpcResponse<T> {
+  const events = body.split(/\r?\n\r?\n/);
+  for (const event of events) {
+    const dataLines = event
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .filter(Boolean);
+    if (!dataLines.length) {
+      continue;
+    }
+
+    const rawPayload = dataLines.join("\n");
+    try {
+      const parsed = JSON.parse(rawPayload) as unknown;
+      if (!isJsonRpcPayload(parsed)) {
+        continue;
+      }
+      if ("id" in parsed && parsed.id !== expectedId) {
+        continue;
+      }
+      return parsed as JsonRpcResponse<T>;
+    } catch {
+      continue;
+    }
+  }
+  throw new MCPAdapterError("MCP_PROTOCOL_ERROR", "MCP stream did not include a valid JSON-RPC payload.", {
+    expectedId,
+  });
+}
+
 export class MCPStreamableHttpTransport {
   constructor(
     private readonly baseUrl: string,
@@ -69,7 +104,10 @@ export class MCPStreamableHttpTransport {
       });
     }
 
-    const payload = (await response.json()) as JsonRpcResponse<T>;
+    const contentType = response.headers?.get?.("content-type") ?? "";
+    const payload = contentType.includes("text/event-stream")
+      ? parseSseJsonRpc<T>(await response.text(), id)
+      : (await response.json()) as JsonRpcResponse<T>;
 
     if ("error" in payload) {
       throw new MCPAdapterError("MCP_PROTOCOL_ERROR", payload.error.message, {
