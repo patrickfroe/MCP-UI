@@ -17,6 +17,10 @@ export interface StdioFormState {
   envText: string;
 }
 
+export function getTransportLabel(transport: MCPTransportType): string {
+  return transport === "stdio" ? "Local STDIO" : "Streamable HTTP";
+}
+
 export function parseEnvText(envText: string): Record<string, string> {
   return Object.fromEntries(
     envText
@@ -45,9 +49,29 @@ export function buildConnectionConfig(transport: MCPTransportType, httpUrl: stri
 
 export function validateConnectionConfig(config: MCPServerConfig): string | null {
   if (config.type === "streamable-http") {
-    return config.url.trim() ? null : "No server configured. Enter a streamable HTTP MCP URL before connecting.";
+    const url = config.url.trim();
+    if (!url) {
+      return "No server configured. Enter a streamable HTTP MCP URL before connecting.";
+    }
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "MCP server URL must start with http:// or https://.";
+      }
+      return null;
+    } catch {
+      return "Enter a valid streamable HTTP URL (example: http://localhost:3001/mcp).";
+    }
   }
   return config.command.trim() ? null : "Command is required for local STDIO transport.";
+}
+
+export function getConnectionStatusMessage(status: "disconnected" | "connecting" | "connected" | "error", transport: MCPTransportType): string {
+  const transportLabel = getTransportLabel(transport);
+  if (status === "connected") return `Connected via ${transportLabel}. Tools are ready to run.`;
+  if (status === "connecting") return `Connecting via ${transportLabel}…`;
+  if (status === "error") return `Connection failed (${transportLabel}). Check settings and diagnostics.`;
+  return "No active connection. Configure a transport and connect to load tools.";
 }
 
 export function filterTools(tools: MCPToolDescriptor[], search: string): MCPToolDescriptor[] {

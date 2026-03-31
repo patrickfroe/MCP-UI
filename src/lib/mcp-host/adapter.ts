@@ -101,7 +101,11 @@ class HttpHostAdapter implements MCPHostAdapter {
       process: undefined,
     };
     this.setStatus("connecting");
-    this.transport = new MCPStreamableHttpTransport(normalizedUrl);
+    this.transport = new MCPStreamableHttpTransport(normalizedUrl, {
+      headers: config.headers,
+      authToken: config.authToken,
+      requestTimeoutMs: config.requestTimeoutMs,
+    });
 
     try {
       const initializeResult = await this.transport.request<InitializeResult>("initialize", {
@@ -118,12 +122,17 @@ class HttpHostAdapter implements MCPHostAdapter {
       };
       return this.connection;
     } catch (error) {
+      const mapped = error instanceof MCPAdapterError
+        ? error
+        : new MCPAdapterError("CONNECTION_FAILED", "MCP connect failed", error);
       this.setStatus("error", {
-        code: "CONNECTION_FAILED",
-        message: error instanceof Error ? error.message : "MCP connect failed",
+        code: mapped.code,
+        message: mapped.message,
         details: { url: normalizedUrl },
       });
-      throw new MCPAdapterError("CONNECTION_FAILED", `Failed to connect to MCP server at ${normalizedUrl}`, error);
+      throw mapped.code === "CONNECTION_FAILED"
+        ? new MCPAdapterError("CONNECTION_FAILED", `Failed to connect to MCP server at ${normalizedUrl}`, error)
+        : mapped;
     }
   }
 
