@@ -20,7 +20,9 @@ import {
   buildConnectionConfig,
   createRunHistoryItem,
   filterTools,
+  getConnectionStatusMessage,
   getNextSelectionState,
+  getTransportLabel,
   serializeFallbackResult,
   type RunHistoryItem,
   validateConnectionConfig,
@@ -71,6 +73,7 @@ export function HostShell() {
 
   const isConnecting = connectionStatus === "connecting";
   const isConnected = connectionStatus === "connected";
+  const transportLabel = getTransportLabel(transport);
   const canConnect = (transport === "streamable-http" ? serverUrl.trim().length > 0 : stdioCommand.trim().length > 0) && !isConnecting;
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.name === selectedToolName) ?? null, [selectedToolName, tools]);
@@ -91,6 +94,14 @@ export function HostShell() {
         setStdioArgs((connection.process?.args ?? []).join(" "));
         setDebugInfo(connection.process?.stderrTail?.join("\n") ?? null);
       }
+      if (connection.status === "error") {
+        const details = connection.lastError?.message ?? "Connection moved to an error state.";
+        setError(`Connection dropped (${getTransportLabel(connection.transport)}): ${details}`);
+      }
+      if (connection.status === "disconnected") {
+        setTools([]);
+        setSelectedToolName(null);
+      }
       if (connection.status === "connected") {
         const toolData = await hostClient.listTools();
         setTools(toolData.tools);
@@ -106,6 +117,14 @@ export function HostShell() {
   useEffect(() => {
     void loadConnectionStatus();
   }, []);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    const timer = setInterval(() => {
+      void loadConnectionStatus();
+    }, 4_000);
+    return () => clearInterval(timer);
+  }, [isConnected]);
 
   const buildConfig = (): MCPServerConfig =>
     buildConnectionConfig(transport, serverUrl, {
@@ -125,6 +144,7 @@ export function HostShell() {
 
     setConnectionStatus("connecting");
     setError(null);
+    setWidgetError(null);
 
     try {
       const { connection } = await hostClient.connect(config);
@@ -142,7 +162,7 @@ export function HostShell() {
       setConnectionStatus("error");
       const message = err instanceof Error ? err.message : "Failed to connect to MCP server";
       setError(message);
-      setDebugInfo(message.includes("PROCESS") || message.includes("TIMEOUT") ? "Check command, args, cwd, and timeout values." : null);
+      setDebugInfo(transport === "stdio" ? "Check command, args, cwd, env, and timeout values." : "Check URL, headers/auth, server availability, and timeout values.");
     }
   };
 
@@ -152,6 +172,10 @@ export function HostShell() {
     setTools([]);
     setSelectedToolName(null);
     setArgs({});
+    setError(null);
+    setWidgetError(null);
+    setWidgetStatus("idle");
+    setDebugInfo(null);
   };
 
   const executeTool = async (tool: MCPToolDescriptor, nextArgs: Record<string, unknown>) => {
@@ -229,15 +253,13 @@ export function HostShell() {
           </div>
         </div>
         <p className="mt-2 text-xs text-slate-600">
-          {connectionStatus === "connected" && "Connected. Tools are ready to run."}
-          {connectionStatus === "connecting" && `Connecting via ${transport === "stdio" ? "local STDIO" : "streamable HTTP"}…`}
-          {connectionStatus === "error" && `Connection failed (${transport === "stdio" ? "Local STDIO" : "Streamable HTTP"}). Check settings and diagnostics.`}
-          {connectionStatus === "disconnected" && "Not connected yet. Connect to load tools."}
+          {getConnectionStatusMessage(connectionStatus, transport)}
         </p>
         {debugInfo ? <pre className="mt-2 max-h-24 overflow-auto rounded-md bg-slate-100 p-2 text-xs text-slate-700">{debugInfo}</pre> : null}
       </Card>
 
       {error ? <div className="mb-2 rounded-md bg-red-100 p-2 text-sm text-red-700">{error}</div> : null}
+      {isConnected ? <div className="mb-2 rounded-md bg-slate-100 p-2 text-xs text-slate-700">Active transport: {transportLabel}.</div> : null}
 
       <div className="grid h-[calc(100vh-11rem)] grid-cols-12 gap-3">
         <Card className="col-span-3 p-3"><div className="flex items-center gap-2"><Input placeholder="Search tools" value={search} onChange={(event) => setSearch(event.target.value)} disabled={!isConnected} /><Button type="button" className="bg-slate-50" onClick={() => void connectAndLoadTools()} disabled={!isConnected || isConnecting}>Refresh</Button></div><div className="mt-3 space-y-2 overflow-auto">{!isConnected ? <p className="text-xs text-slate-500">Connect to an MCP server to list tools.</p> : null}{isConnected && tools.length === 0 ? <p className="text-xs text-slate-500">Connected, but no tools were returned by the server.</p> : null}{isConnected && tools.length > 0 && filteredTools.length === 0 ? <p className="text-xs text-slate-500">No tools match the current search.</p> : null}{filteredTools.map((tool) => {const toolHasUi = isUiCapableTool(tool); return <button key={tool.name} className={`w-full rounded-md border p-2 text-left text-sm ${selectedToolName === tool.name ? "border-slate-500 bg-slate-100" : "border-slate-200"}`} onClick={() => {const next = getNextSelectionState(tools, tool.name); setSelectedToolName(next.selectedToolName); setArgs(next.args); setWidgetError(null); setWidgetStatus("idle");}}><div className="flex items-center justify-between gap-2"><div className="font-medium">{tool.title ?? tool.name}</div><ToolCapabilityBadge isUi={toolHasUi} /></div><div className="text-xs text-slate-500">{tool.description ?? tool.name}</div></button>;})}</div></Card>

@@ -41,7 +41,7 @@ function normalizeConfig(body: Record<string, unknown>): MCPServerConfig {
     url,
     headers: body["headers"] as Record<string, string> | undefined,
     authToken: body["authToken"] as string | undefined,
-    requestTimeoutMs: typeof body.requestTimeoutMs === "number" ? body.requestTimeoutMs : undefined,
+    requestTimeoutMs: parseTimeout(body.requestTimeoutMs, "requestTimeoutMs"),
     name: typeof body.name === "string" ? body.name : undefined,
   };
 }

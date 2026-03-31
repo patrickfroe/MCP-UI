@@ -44,6 +44,30 @@ test("http connection status lifecycle covers disconnected/connecting/connected/
   }
 });
 
+test("http connect surfaces REQUEST_TIMEOUT when configured timeout is exceeded", async () => {
+  const adapter = new MCPHostRuntime();
+  const originalFetch = global.fetch;
+  global.fetch = ((_: RequestInfo | URL, init?: RequestInit) =>
+    new Promise((_, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      });
+    })) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => adapter.connect({ type: "streamable-http", url: "http://localhost:3001/mcp", requestTimeoutMs: 5 }),
+      (error: unknown) => {
+        const mapped = toMCPHostError(error, "INTERNAL_ERROR");
+        assert.equal(mapped.code, "REQUEST_TIMEOUT");
+        return true;
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("stdio integration: connect, listTools, callTool, readResource, disconnect", async () => {
   const adapter = new MCPHostRuntime();
   const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
