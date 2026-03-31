@@ -67,9 +67,16 @@ test("normalizeToolRun and normalizeResource return normalized transport-safe sh
   assert.equal(resource.text, "<html>widget</html>");
 });
 
-test("normalizeResource tolerates malformed upstream payload", () => {
-  const resource = normalizeResource("ui://x", { hello: "world" });
-  assert.equal(resource.resourceUri, "ui://x");
-  assert.equal(resource.text, undefined);
-  assert.equal(resource.blob, undefined);
+test("normalizeToolRun marks isError and error payloads as failed runs", () => {
+  const runByFlag = normalizeToolRun("demo", {}, { isError: true, message: "bad" });
+  assert.equal(runByFlag.succeeded, false);
+
+  const runByError = normalizeToolRun("demo", {}, { error: { message: "bad" } });
+  assert.equal(runByError.succeeded, false);
+});
+
+test("normalizeResource rejects malformed upstream payload", () => {
+  assert.throws(() => normalizeResource("ui://x", { hello: "world" }));
+  assert.throws(() => normalizeResource("ui://x", { contents: [] }));
+  assert.throws(() => normalizeResource("ui://x", { contents: [{ mimeType: "text/html" }] }));
 });

@@ -8,10 +8,13 @@ import {
   getNextSelectionState,
   getTransportLabel,
   parseEnvText,
+  parseHeadersText,
   serializeFallbackResult,
   validateConnectionConfig,
 } from "@/lib/host-shell-model";
 import { makeTool, makeUiTool } from "@/test-utils/fixtures";
+
+const emptyHttp = { headersText: "", authToken: "", requestTimeoutMsText: "" };
 
 test("tool list filtering and selection state reset behavior", () => {
   const tools = [
@@ -39,18 +42,18 @@ test("connection form model switches transport fields and validates command/url"
     argsText: "",
     cwd: "",
     envText: "",
-  });
+  }, emptyHttp);
   assert.equal(httpConfig.type, "streamable-http");
   assert.equal(validateConnectionConfig(httpConfig), null);
-  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "localhost:3001/mcp", { command: "", argsText: "", cwd: "", envText: "" })), "MCP server URL must start with http:// or https://.");
-  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "ftp://localhost", { command: "", argsText: "", cwd: "", envText: "" })), "MCP server URL must start with http:// or https://.");
+  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "localhost:3001/mcp", { command: "", argsText: "", cwd: "", envText: "" }, emptyHttp)), "MCP server URL must start with http:// or https://.");
+  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "ftp://localhost", { command: "", argsText: "", cwd: "", envText: "" }, emptyHttp)), "MCP server URL must start with http:// or https://.");
 
   const stdioConfig = buildConnectionConfig("stdio", "", {
     command: "node",
     argsText: "server.js --stdio",
     cwd: "/tmp",
     envText: "FOO=bar\nEMPTY=",
-  });
+  }, emptyHttp);
   assert.equal(stdioConfig.type, "stdio");
   assert.deepEqual(stdioConfig.args, ["server.js", "--stdio"]);
   assert.deepEqual(stdioConfig.env, { FOO: "bar", EMPTY: "" });
@@ -61,9 +64,29 @@ test("connection form model switches transport fields and validates command/url"
     argsText: "",
     cwd: "",
     envText: "",
-  });
+  }, emptyHttp);
   assert.equal(validateConnectionConfig(invalid), "Command is required for local STDIO transport.");
   assert.deepEqual(parseEnvText("A=1\nB=two"), { A: "1", B: "two" });
+});
+
+test("http advanced config parsing supports headers/auth/timeout", () => {
+  const httpConfig = buildConnectionConfig("streamable-http", "https://mcp.example.com/mcp", {
+    command: "",
+    argsText: "",
+    cwd: "",
+    envText: "",
+  }, {
+    headersText: "X-API-Key: abc\nX-Trace: req-1",
+    authToken: "secret-token",
+    requestTimeoutMsText: "20000",
+  });
+
+  assert.equal(httpConfig.type, "streamable-http");
+  assert.deepEqual(httpConfig.headers, { "X-API-Key": "abc", "X-Trace": "req-1" });
+  assert.equal(httpConfig.authToken, "secret-token");
+  assert.equal(httpConfig.requestTimeoutMs, 20000);
+  assert.equal(validateConnectionConfig(httpConfig), null);
+  assert.deepEqual(parseHeadersText("A: 1\nB: two"), { A: "1", B: "two" });
 });
 
 test("transport switch preserves only intended fields across HTTP and STDIO", () => {
@@ -72,7 +95,7 @@ test("transport switch preserves only intended fields across HTTP and STDIO", ()
     argsText: "server.js",
     cwd: "/workspace/MCP-UI",
     envText: "A=1",
-  });
+  }, emptyHttp);
   assert.equal(stdioConfig.type, "stdio");
   assert.equal("url" in stdioConfig, false);
 
@@ -81,7 +104,7 @@ test("transport switch preserves only intended fields across HTTP and STDIO", ()
     argsText: "server.js",
     cwd: "/workspace/MCP-UI",
     envText: "A=1",
-  });
+  }, emptyHttp);
   assert.equal(httpConfig.type, "streamable-http");
   assert.equal("command" in httpConfig, false);
 });
@@ -92,7 +115,7 @@ test("stdio validation messaging is actionable for missing required fields", () 
     argsText: "--stdio",
     cwd: "",
     envText: "TOKEN=abc",
-  });
+  }, emptyHttp);
   assert.equal(validateConnectionConfig(missingCommand), "Command is required for local STDIO transport.");
 });
 

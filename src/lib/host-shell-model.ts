@@ -17,6 +17,12 @@ export interface StdioFormState {
   envText: string;
 }
 
+export interface HttpFormState {
+  headersText: string;
+  authToken: string;
+  requestTimeoutMsText: string;
+}
+
 export function getTransportLabel(transport: MCPTransportType): string {
   return transport === "stdio" ? "Local STDIO" : "Streamable HTTP";
 }
@@ -34,7 +40,35 @@ export function parseEnvText(envText: string): Record<string, string> {
   );
 }
 
-export function buildConnectionConfig(transport: MCPTransportType, httpUrl: string, stdio: StdioFormState): MCPServerConfig {
+export function parseHeadersText(headersText: string): Record<string, string> {
+  return Object.fromEntries(
+    headersText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const idx = line.indexOf(":");
+        return idx < 0 ? [line, ""] : [line.slice(0, idx).trim(), line.slice(idx + 1).trim()];
+      })
+      .filter(([key]) => Boolean(key)),
+  );
+}
+
+function parseOptionalPositiveNumber(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : Number.NaN;
+}
+
+export function buildConnectionConfig(
+  transport: MCPTransportType,
+  httpUrl: string,
+  stdio: StdioFormState,
+  http: HttpFormState,
+): MCPServerConfig {
   if (transport === "stdio") {
     return {
       type: "stdio",
@@ -44,7 +78,16 @@ export function buildConnectionConfig(transport: MCPTransportType, httpUrl: stri
       env: stdio.envText.trim() ? parseEnvText(stdio.envText) : undefined,
     };
   }
-  return { type: "streamable-http", url: httpUrl };
+
+  const parsedTimeout = parseOptionalPositiveNumber(http.requestTimeoutMsText);
+
+  return {
+    type: "streamable-http",
+    url: httpUrl,
+    headers: http.headersText.trim() ? parseHeadersText(http.headersText) : undefined,
+    authToken: http.authToken.trim() || undefined,
+    requestTimeoutMs: Number.isNaN(parsedTimeout) ? undefined : parsedTimeout,
+  };
 }
 
 export function validateConnectionConfig(config: MCPServerConfig): string | null {
@@ -58,10 +101,19 @@ export function validateConnectionConfig(config: MCPServerConfig): string | null
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         return "MCP server URL must start with http:// or https://.";
       }
-      return null;
     } catch {
       return "Enter a valid streamable HTTP URL (example: http://localhost:3001/mcp).";
     }
+
+    if (config.requestTimeoutMs !== undefined && (!Number.isFinite(config.requestTimeoutMs) || config.requestTimeoutMs <= 0)) {
+      return "HTTP request timeout must be a positive number of milliseconds.";
+    }
+
+    if (config.headers && Object.entries(config.headers).some(([key, value]) => !key.trim() || typeof value !== "string")) {
+      return "HTTP headers must be in Header: value format with non-empty header names.";
+    }
+
+    return null;
   }
   return config.command.trim() ? null : "Command is required for local STDIO transport.";
 }
