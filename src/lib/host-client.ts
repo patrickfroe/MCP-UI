@@ -1,4 +1,11 @@
-import type { MCPHostError, MCPResourceContents, MCPServerConnection, MCPToolDescriptor, MCPToolRun } from "@/lib/types";
+import type {
+  MCPHostError,
+  MCPResourceContents,
+  MCPServerConfig,
+  MCPServerConnection,
+  MCPToolDescriptor,
+  MCPToolRun,
+} from "@/lib/types";
 
 interface HostErrorResponse {
   error?: MCPHostError;
@@ -27,10 +34,16 @@ async function hostRequest<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const hostClient = {
-  connect: (baseUrl: string) =>
+  connect: (config: MCPServerConfig) =>
     hostRequest<{ connection: MCPServerConnection }>("/api/host/connect", {
       method: "POST",
-      body: JSON.stringify({ baseUrl }),
+      body: JSON.stringify(config),
+    }),
+
+  disconnect: () =>
+    hostRequest<{ connection: MCPServerConnection }>("/api/host/disconnect", {
+      method: "POST",
+      body: "{}",
     }),
 
   status: () => hostRequest<{ connection: MCPServerConnection }>("/api/host/status"),

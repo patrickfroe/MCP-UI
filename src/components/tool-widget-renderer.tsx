@@ -5,7 +5,8 @@ import * as MCPUIClient from "@mcp-ui/client";
 import { Card } from "@/components/ui/card";
 import { hostClient } from "@/lib/host-client";
 
-const AppRenderer = (MCPUIClient as Record<string, React.ComponentType<any>>).AppRenderer;
+type RendererProps = Record<string, unknown>;
+const AppRenderer = (MCPUIClient as Record<string, React.ComponentType<RendererProps>>).AppRenderer;
 
 export type WidgetRenderStatus = "idle" | "loading" | "success" | "error";
 
