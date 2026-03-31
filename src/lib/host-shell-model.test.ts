@@ -4,7 +4,9 @@ import {
   buildConnectionConfig,
   createRunHistoryItem,
   filterTools,
+  getConnectionStatusMessage,
   getNextSelectionState,
+  getTransportLabel,
   parseEnvText,
   serializeFallbackResult,
   validateConnectionConfig,
@@ -40,6 +42,8 @@ test("connection form model switches transport fields and validates command/url"
   });
   assert.equal(httpConfig.type, "streamable-http");
   assert.equal(validateConnectionConfig(httpConfig), null);
+  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "localhost:3001/mcp", { command: "", argsText: "", cwd: "", envText: "" })), "MCP server URL must start with http:// or https://.");
+  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "ftp://localhost", { command: "", argsText: "", cwd: "", envText: "" })), "MCP server URL must start with http:// or https://.");
 
   const stdioConfig = buildConnectionConfig("stdio", "", {
     command: "node",
@@ -105,6 +109,13 @@ test("run history metadata includes tool name/status/timestamp/input summary", (
   assert.equal(history.status, "success");
   assert.equal(history.timestamp, "2026-03-30T00:00:00.000Z");
   assert.ok(history.inputSummary.includes('text="hello"'));
+});
+
+test("connection status labels are transport-aware and actionable", () => {
+  assert.equal(getTransportLabel("streamable-http"), "Streamable HTTP");
+  assert.equal(getTransportLabel("stdio"), "Local STDIO");
+  assert.equal(getConnectionStatusMessage("disconnected", "stdio"), "No active connection. Configure a transport and connect to load tools.");
+  assert.equal(getConnectionStatusMessage("connecting", "streamable-http"), "Connecting via Streamable HTTP…");
 });
 
 test("fallback renderer serialization supports plain text/json/array/empty/unexpected", () => {

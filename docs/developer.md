@@ -1,89 +1,139 @@
 # Developer Notes
 
-This document is intentionally brief and focused on this MVP codebase.
+This doc describes the implementation as shipped for the MCP UI Host MVP.
 
-## Folder/module map
+## Folder/module structure
 
 - `src/app/`
-  - Next.js app router entrypoints and host API routes.
+  - Next.js App Router pages and host API routes.
+- `src/app/api/host/*`
+  - Internal host endpoints: `connect`, `status`, `list-tools`, `call-tool`, `read-resource`, `disconnect`.
 - `src/components/`
-  - `host-shell.tsx`: main UI state + flow orchestration.
-  - `tool-widget-renderer.tsx`: widget resource loading + `AppRenderer` mounting.
-  - `ui/`: small shared presentational primitives.
+  - `host-shell.tsx`: product flow, presentation state, transport form, tool UX.
+  - `tool-widget-renderer.tsx`: widget resource loading and `AppRenderer` integration.
+  - `ui/*`: minimal shared UI primitives.
+- `src/lib/mcp-host/`
+  - `adapter.ts`: runtime + transport adapters.
+  - `json-rpc.ts`: streamable HTTP JSON-RPC transport.
+  - `normalizers.ts`: tool/run/resource normalization.
+  - `errors.ts`: typed host error mapping.
 - `src/lib/`
-  - `mcp-host/`: transport adapter, normalizers, and MCP error mapping.
-  - `tool-execution.ts`: schema-to-form helpers, coercion, validation, widget gating helpers.
-  - `host-shell-model.ts`: pure model helpers for filtering/selection/history/fallback serialization.
-  - `types.ts`: normalized host-side types.
+  - `types.ts`: normalized host contracts.
+  - `host-client.ts`: frontend API client.
+  - `host-shell-model.ts`: pure UI model helpers.
+  - `tool-execution.ts`: schema/form coercion/validation/widget gating.
 - `src/test-utils/`
-  - stable fixtures for tests.
+  - fixtures and stdio test server.
 
-## Host adapter responsibilities
+## Shared host adapter architecture
 
-`MCPHostAdapter` (`src/lib/mcp-host/adapter.ts`) owns MCP server interaction and keeps connection logic outside React components.
+`MCPHostRuntime` is the single host runtime used by API routes. It enforces one active adapter/session at a time:
 
-Responsibilities:
+- disconnect previous adapter before every connect
+- create transport adapter by config type
+- delegate status/list/call/read/disconnect through normalized interface
 
-- connect and initialize over streamable HTTP
-- store single-server connection status
-- list tools and normalize descriptors
-- call tools and normalize runs
-- read resources and normalize resource payloads
+Adapters:
 
-The UI should talk to adapter-backed API routes only.
+- `HttpHostAdapter`
+- `StdioHostAdapter`
 
-## Normalized data model (high-level)
+Both implement `MCPHostAdapter` from `src/lib/types.ts`.
 
-- `MCPServerConnection`: host connection metadata + status/error.
-- `MCPToolDescriptor`: normalized tool metadata + optional `uiBinding.resourceUri`.
-- `MCPToolRun`: normalized run record for history and result panels.
-- `MCPResourceContents`: normalized resource read response for widget loading.
+## Transport abstraction design
 
-Normalization logic lives in `src/lib/mcp-host/normalizers.ts`.
+`createTransportAdapter(config)` selects adapter by `config.type`.
 
-## Where rendering paths are wired
+Presentation components never call transport objects directly. They call API routes via `hostClient` and use normalized types.
 
-- **Fallback path:** `ResultFallbackView` in `src/components/host-shell.tsx`.
-- **Widget path:** `ToolWidgetRenderer` in `src/components/tool-widget-renderer.tsx`.
-- Widget eligibility gate: `shouldRenderWidget` + `isUiCapableTool` in `src/lib/tool-execution.ts`.
+## HTTP adapter responsibilities
 
-Both paths are first-class and should remain visible.
+`HttpHostAdapter` handles:
 
-## Adding a new schema field type safely
+- config validation for HTTP URL and runtime metadata
+- initialize handshake
+- tools list / tool call / resource read via JSON-RPC requests
+- connection status transitions (`disconnected`/`connecting`/`connected`/`error`)
+- timeout/header/auth-token wiring through `MCPStreamableHttpTransport`
 
-1. Add support in `ToolFieldSchema`/related types (`src/lib/tool-execution.ts`).
-2. Extend `buildInitialArgs`, `validateToolArgs`, and `coerceArgsForSubmission` consistently.
-3. Add rendering logic in `host-shell.tsx` form section.
-4. Add/adjust tests in `src/lib/tool-execution.test.ts`.
-5. Confirm fallback + widget paths still behave unchanged.
+## STDIO adapter + process manager responsibilities
+
+`StdioSession` + `StdioHostAdapter` handle:
+
+- subprocess spawn for local server command
+- JSON-RPC framing (`Content-Length` protocol)
+- startup timeout (`initialize`) and request timeout for each call
+- bounded stderr capture (tail limit)
+- malformed JSON response detection
+- unexpected process exit mapping (`PROCESS_EXITED`)
+- graceful disconnect (`SIGTERM` then fallback `SIGKILL`)
+- reconnect replacement (previous session is terminated first)
+
+## Normalized data model overview
+
+Key shapes (in `src/lib/types.ts`):
+
+- `MCPServerConnection`: status, transport, server info, process diagnostics.
+- `MCPToolDescriptor`: normalized tool info + optional `uiBinding.resourceUri`.
+- `MCPToolRun`: normalized run record for fallback and history views.
+- `MCPResourceContents`: normalized `resources/read` payload.
+
+Normalization entry points: `src/lib/mcp-host/normalizers.ts`.
+
+## Where tool execution is wired
+
+- UI trigger: `HostShell` run actions.
+- Call path: `hostClient.callTool` -> `/api/host/call-tool` -> `mcpHostAdapter.callTool`.
+- Form shaping/validation: `src/lib/tool-execution.ts`.
+
+## Where widget rendering is wired
+
+- Gate: `isUiCapableTool` + `shouldRenderWidget` in `tool-execution.ts`.
+- Component: `src/components/tool-widget-renderer.tsx`.
+- Resource read path: `hostClient.readResource` -> `/api/host/read-resource`.
+- Render target: `@mcp-ui/client` `AppRenderer` with sandbox proxy URL.
+
+## Where fallback rendering is wired
+
+- `ResultFallbackView` in `src/components/host-shell.tsx`.
+- Serialization helper: `serializeFallbackResult` in `src/lib/host-shell-model.ts`.
+
+Fallback remains available even when widget rendering fails.
+
+## Debugging transport issues
+
+1. Check `/api/host/status` first.
+2. Reconnect via `/api/host/connect` and inspect returned `connection` state.
+3. Verify `/api/host/list-tools` behavior.
+4. For STDIO, inspect `connection.process.stderrTail` diagnostics.
+5. For HTTP, verify endpoint and timeout/header/auth settings.
 
 ## Debugging widget issues
 
-1. Verify selected tool is UI-capable (`uiBinding.resourceUri` exists).
-2. Confirm tool run succeeded (widget path is success-only in MVP).
-3. Check `/api/host/read-resource` behavior and returned payload (`text` or `blob`).
-4. Confirm `/sandbox-proxy.html` is accessible.
-5. Inspect browser console for `AppRenderer` errors; fallback output should remain available.
+1. Confirm tool has `_meta.ui.resourceUri` (normalized to `uiBinding.resourceUri`).
+2. Run tool successfully (widget path is success-gated).
+3. Verify `/api/host/read-resource` returns `text` or `blob`.
+4. Open `/sandbox-proxy.html` directly and verify availability.
+5. Inspect browser console + widget status/error banner.
 
-## Debugging MCP integration issues
+## Testing strategy overview
 
-1. Start with `GET /api/host/status`.
-2. Reconnect via `POST /api/host/connect` and confirm no initialize error.
-3. Call `GET /api/host/list-tools` to validate upstream tool list.
-4. Validate `POST /api/host/call-tool` payload shape and adapter error mapping.
-5. If needed, inspect `src/lib/mcp-host/json-rpc.ts` for transport-level failures.
+Coverage is split across:
 
-## Testing strategy
-
-- Unit tests for pure model/logic helpers:
+- pure helpers and UI model behavior
   - `src/lib/tool-execution.test.ts`
   - `src/lib/host-shell-model.test.ts`
   - `src/lib/mcp-host/normalizers.test.ts`
-- Adapter and API route behavior tests:
+- transport lifecycle + adapter/runtime behavior
   - `src/lib/mcp-host/adapter.test.ts`
+- API route behavior
   - `src/app/api/host/routes.test.ts`
 
-Run full checks before handoff:
+The tests include both transports, transport switching, fallback/widget gates, and stdio lifecycle scenarios (timeouts, exits, reconnect, stderr bounds).
+
+## Handoff checklist
+
+Before handoff run:
 
 ```bash
 npm run lint
