@@ -4,7 +4,7 @@ import * as React from "react";
 import { AppRenderer } from "@mcp-ui/client";
 import { Card } from "@/components/ui/card";
 import { hostClient } from "@/lib/host-client";
-import { handleWidgetBridgeMessage, loadWidgetResource, sanitizeOpenLinkUrl } from "@/lib/widget-runtime";
+import { handleWidgetBridgeMessage, loadWidgetResource, normalizeToolCallBridgeResult, sanitizeOpenLinkUrl } from "@/lib/widget-runtime";
 
 export type WidgetRenderStatus = "idle" | "loading" | "success" | "error";
 
@@ -35,7 +35,7 @@ export function ToolWidgetRenderer({
   }, []);
 
   const callTool = React.useCallback((nextToolName: string, args: Record<string, unknown>) => {
-    return hostClient.callTool(nextToolName, args);
+    return hostClient.callTool(nextToolName, args).then(normalizeToolCallBridgeResult);
   }, []);
 
   React.useEffect(() => {
