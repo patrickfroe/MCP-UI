@@ -17,6 +17,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ run });
   } catch (error) {
     const hostError = toMCPHostError(error, "TOOL_CALL_FAILED");
+    if (hostError.code === "NOT_CONNECTED") {
+      hostError.details = {
+        ...(typeof hostError.details === "object" && hostError.details !== null ? hostError.details as Record<string, unknown> : {}),
+        connection: mcpHostAdapter.status(),
+      };
+    }
     return NextResponse.json({ error: hostError }, { status: 500 });
   }
 }

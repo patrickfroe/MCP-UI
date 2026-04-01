@@ -199,7 +199,14 @@ class HttpHostAdapter implements MCPHostAdapter {
 
   private requireTransport() {
     if (!this.transport || this.connection.status !== "connected") {
-      throw new MCPAdapterError("NOT_CONNECTED", "Host is not connected to an MCP server");
+      throw new MCPAdapterError("NOT_CONNECTED", "Host is not connected to an MCP server", {
+        transport: this.connection.transport,
+        status: this.connection.status,
+        hasActiveConnectionRecord: Boolean(this.connection.id),
+        initializationCompleted: this.transport?.diagnostics().initialized ?? false,
+        hasClientHandle: Boolean(this.transport),
+        diagnostics: this.transport?.diagnostics(),
+      });
     }
     return this.transport;
   }
@@ -537,7 +544,14 @@ class StdioHostAdapter implements MCPHostAdapter {
 
   private requireSession() {
     if (!this.session || this.connection.status !== "connected") {
-      throw new MCPAdapterError("NOT_CONNECTED", "Host is not connected to an MCP server");
+      throw new MCPAdapterError("NOT_CONNECTED", "Host is not connected to an MCP server", {
+        transport: this.connection.transport,
+        status: this.connection.status,
+        hasActiveConnectionRecord: Boolean(this.connection.id),
+        initializationCompleted: this.connection.status === "connected",
+        hasClientHandle: Boolean(this.session),
+        diagnostics: this.session?.diagnostics(),
+      });
     }
     return this.session;
   }
@@ -550,27 +564,54 @@ export function createTransportAdapter(config: MCPServerConfig): MCPHostAdapter 
 export class MCPHostRuntime implements MCPHostAdapter {
   private adapter: MCPHostAdapter = new HttpHostAdapter();
   private lastConfig: MCPServerConfig = { type: "streamable-http", url: "http://localhost:3001/mcp" };
+  private connectInFlight: Promise<MCPServerConnection> | null = null;
 
   async connect(config: MCPServerConfig): Promise<MCPServerConnection> {
-    await this.adapter.disconnect();
-    this.adapter = createTransportAdapter(config);
-    this.lastConfig = config;
-    return this.adapter.connect(config);
+    const operation = (async () => {
+      await this.adapter.disconnect();
+      this.adapter = createTransportAdapter(config);
+      this.lastConfig = config;
+      return this.adapter.connect(config);
+    })();
+    this.connectInFlight = operation;
+    try {
+      return await operation;
+    } finally {
+      if (this.connectInFlight === operation) {
+        this.connectInFlight = null;
+      }
+    }
   }
 
   status() {
-    return this.adapter.status();
+    const connection = this.adapter.status();
+    return {
+      ...connection,
+      raw: {
+        ...(typeof connection.raw === "object" && connection.raw !== null ? connection.raw as Record<string, unknown> : {}),
+        hostRuntime: {
+          hasActiveConnectionRecord: Boolean(connection.id),
+          transport: connection.transport,
+          initializationCompleted: connection.status === "connected",
+          hasClientHandle: this.hasClientHandle(),
+          connectInFlight: Boolean(this.connectInFlight),
+        },
+      },
+    };
   }
 
-  listTools() {
+  async listTools() {
+    await this.awaitConnectIfNeeded();
     return this.adapter.listTools();
   }
 
-  callTool(toolName: string, args: Record<string, unknown>) {
+  async callTool(toolName: string, args: Record<string, unknown>) {
+    await this.awaitConnectIfNeeded();
     return this.adapter.callTool(toolName, args);
   }
 
-  readResource(resourceUri: string) {
+  async readResource(resourceUri: string) {
+    await this.awaitConnectIfNeeded();
     return this.adapter.readResource(resourceUri);
   }
 
@@ -581,6 +622,26 @@ export class MCPHostRuntime implements MCPHostAdapter {
   getLastConfig() {
     return this.lastConfig;
   }
+
+  private async awaitConnectIfNeeded() {
+    if (!this.connectInFlight) {
+      return;
+    }
+    await this.connectInFlight;
+  }
+
+  private hasClientHandle() {
+    const connection = this.adapter.status();
+    return connection.transport === "stdio"
+      ? Boolean(connection.process?.pid)
+      : Boolean((connection.raw as { transport?: { initialized?: boolean } } | undefined)?.transport);
+  }
 }
 
-export const mcpHostAdapter = new MCPHostRuntime();
+declare global {
+  // eslint-disable-next-line no-var
+  var __mcpHostRuntimeSingleton: MCPHostRuntime | undefined;
+}
+
+export const mcpHostAdapter = globalThis.__mcpHostRuntimeSingleton ?? new MCPHostRuntime();
+globalThis.__mcpHostRuntimeSingleton = mcpHostAdapter;
