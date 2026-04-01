@@ -128,7 +128,7 @@ class HttpHostAdapter implements MCPHostAdapter {
         status: "connected",
         connectedAt: new Date().toISOString(),
         serverInfo: initializeResult.serverInfo,
-        raw: initializeResult,
+        raw: { initializeResult, transport: this.transport.diagnostics() },
       };
       return this.connection;
     } catch (error) {
@@ -152,8 +152,15 @@ class HttpHostAdapter implements MCPHostAdapter {
 
   async listTools(): Promise<MCPToolDescriptor[]> {
     const transport = this.requireTransport();
-    const result = await transport.request<{ tools?: unknown[] }>("tools/list", {});
-    return normalizeTools(result.tools);
+    try {
+      const result = await transport.request<{ tools?: unknown[] }>("tools/list", {});
+      return normalizeTools(result.tools);
+    } catch (error) {
+      throw new MCPAdapterError("MCP_PROTOCOL_ERROR", "Failed to list MCP tools.", {
+        ...(error instanceof MCPAdapterError ? error.toJSON() : { cause: String(error) }),
+        transport: transport.diagnostics(),
+      });
+    }
   }
 
   async callTool(toolName: string, args: Record<string, unknown>): Promise<MCPToolRun> {

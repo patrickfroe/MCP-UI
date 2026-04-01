@@ -54,6 +54,10 @@ function parseSseJsonRpc<T>(body: string, expectedId: string): JsonRpcResponse<T
 }
 
 export class MCPStreamableHttpTransport {
+  private sessionId: string | null = null;
+  private initializeParams: Record<string, unknown> | null = null;
+  private initialized = false;
+
   constructor(
     private readonly baseUrl: string,
     private readonly options?: {
@@ -63,7 +67,21 @@ export class MCPStreamableHttpTransport {
     },
   ) {}
 
-  async request<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+  async request<T>(method: string, params?: Record<string, unknown>, allowRetry = true): Promise<T> {
+    if (method !== "initialize" && !this.initialized) {
+      throw new MCPAdapterError("MCP_PROTOCOL_ERROR", "Cannot send MCP request before initialize completes.", {
+        method,
+        transport: "streamable-http",
+        initialized: this.initialized,
+        hasSessionId: Boolean(this.sessionId),
+        url: this.baseUrl,
+      });
+    }
+
+    if (method === "initialize") {
+      this.initializeParams = params ?? {};
+    }
+
     const id = crypto.randomUUID();
     const controller = new AbortController();
     const timeout = this.options?.requestTimeoutMs && this.options.requestTimeoutMs > 0
@@ -76,6 +94,7 @@ export class MCPStreamableHttpTransport {
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json, text/event-stream",
+          ...(method !== "initialize" && this.sessionId ? { "mcp-session-id": this.sessionId } : {}),
           ...(this.options?.authToken ? { Authorization: `Bearer ${this.options.authToken}` } : {}),
           ...(this.options?.headers ?? {}),
         },
@@ -97,10 +116,35 @@ export class MCPStreamableHttpTransport {
       }
     }
 
+    if (method === "initialize") {
+      const nextSessionId = response.headers?.get?.("mcp-session-id");
+      this.sessionId = nextSessionId?.trim() || null;
+    }
+
     if (!response.ok) {
-      throw new MCPAdapterError("MCP_PROTOCOL_ERROR", `MCP transport failed with status ${response.status}`, {
+      const payloadText = await response.text().catch(() => "");
+      const failureDetails = {
         method,
         status: response.status,
+        transport: "streamable-http",
+        initialized: this.initialized,
+        hasSessionId: Boolean(this.sessionId),
+        url: this.baseUrl,
+        path: this.safePathname(),
+        includesSessionHeader: method !== "initialize" && Boolean(this.sessionId),
+        hasAuthHeader: Boolean(this.options?.authToken),
+        responsePreview: payloadText.slice(0, 400),
+      };
+
+      if (method !== "initialize" && response.status === 400 && allowRetry && this.initializeParams) {
+        this.initialized = false;
+        this.sessionId = null;
+        await this.request("initialize", this.initializeParams, false);
+        return this.request<T>(method, params, false);
+      }
+
+      throw new MCPAdapterError("MCP_PROTOCOL_ERROR", `MCP transport failed with status ${response.status}`, {
+        ...failureDetails,
       });
     }
 
@@ -114,9 +158,36 @@ export class MCPStreamableHttpTransport {
         method,
         rpcCode: payload.error.code,
         rpcData: payload.error.data,
+        transport: "streamable-http",
+        initialized: this.initialized,
+        hasSessionId: Boolean(this.sessionId),
+        url: this.baseUrl,
+        path: this.safePathname(),
       });
     }
 
+    if (method === "initialize") {
+      this.initialized = true;
+    }
+
     return payload.result;
+  }
+
+  diagnostics() {
+    return {
+      transport: "streamable-http" as const,
+      initialized: this.initialized,
+      hasSessionId: Boolean(this.sessionId),
+      url: this.baseUrl,
+      path: this.safePathname(),
+    };
+  }
+
+  private safePathname() {
+    try {
+      return new URL(this.baseUrl).pathname;
+    } catch {
+      return undefined;
+    }
   }
 }
