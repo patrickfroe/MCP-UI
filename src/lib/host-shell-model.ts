@@ -15,6 +15,8 @@ export interface StdioFormState {
   argsText: string;
   cwd: string;
   envText: string;
+  startupTimeoutMsText: string;
+  requestTimeoutMsText: string;
 }
 
 export interface HttpFormState {
@@ -63,6 +65,67 @@ function parseOptionalPositiveNumber(value: string): number | undefined {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : Number.NaN;
 }
 
+export function parseCommandArgs(argsText: string): string[] {
+  const input = argsText.trim();
+  if (!input) {
+    return [];
+  }
+
+  const args: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escapeNext = false;
+
+  for (const char of input) {
+    if (escapeNext) {
+      current += char;
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escapeNext = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (escapeNext) {
+    current += "\\";
+  }
+  if (quote) {
+    throw new Error("Unterminated quote in STDIO args.");
+  }
+  if (current) {
+    args.push(current);
+  }
+
+  return args;
+}
+
 export function buildConnectionConfig(
   transport: MCPTransportType,
   httpUrl: string,
@@ -70,23 +133,36 @@ export function buildConnectionConfig(
   http: HttpFormState,
 ): MCPServerConfig {
   if (transport === "stdio") {
+    const startupTimeout = parseOptionalPositiveNumber(stdio.startupTimeoutMsText);
+    const requestTimeout = parseOptionalPositiveNumber(stdio.requestTimeoutMsText);
+    if (Number.isNaN(startupTimeout)) {
+      throw new Error("STDIO startup timeout must be a positive number.");
+    }
+    if (Number.isNaN(requestTimeout)) {
+      throw new Error("STDIO request timeout must be a positive number.");
+    }
     return {
       type: "stdio",
       command: stdio.command,
-      args: stdio.argsText.trim() ? stdio.argsText.split(" ").filter(Boolean) : [],
+      args: parseCommandArgs(stdio.argsText),
       cwd: stdio.cwd.trim() || undefined,
       env: stdio.envText.trim() ? parseEnvText(stdio.envText) : undefined,
+      startupTimeoutMs: startupTimeout,
+      requestTimeoutMs: requestTimeout,
     };
   }
 
   const parsedTimeout = parseOptionalPositiveNumber(http.requestTimeoutMsText);
+  if (Number.isNaN(parsedTimeout)) {
+    throw new Error("HTTP request timeout must be a positive number.");
+  }
 
   return {
     type: "streamable-http",
     url: httpUrl,
     headers: http.headersText.trim() ? parseHeadersText(http.headersText) : undefined,
     authToken: http.authToken.trim() || undefined,
-    requestTimeoutMs: Number.isNaN(parsedTimeout) ? undefined : parsedTimeout,
+    requestTimeoutMs: parsedTimeout,
   };
 }
 
@@ -115,7 +191,16 @@ export function validateConnectionConfig(config: MCPServerConfig): string | null
 
     return null;
   }
-  return config.command.trim() ? null : "Command is required for local STDIO transport.";
+  if (!config.command.trim()) {
+    return "Command is required for local STDIO transport.";
+  }
+  if (config.startupTimeoutMs !== undefined && (!Number.isFinite(config.startupTimeoutMs) || config.startupTimeoutMs <= 0)) {
+    return "STDIO startup timeout must be a positive number of milliseconds.";
+  }
+  if (config.requestTimeoutMs !== undefined && (!Number.isFinite(config.requestTimeoutMs) || config.requestTimeoutMs <= 0)) {
+    return "STDIO request timeout must be a positive number of milliseconds.";
+  }
+  return null;
 }
 
 export function getConnectionStatusMessage(status: "disconnected" | "connecting" | "connected" | "error", transport: MCPTransportType): string {

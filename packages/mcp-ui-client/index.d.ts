@@ -22,4 +22,3 @@ export interface AppRendererProps {
 }
 
 export declare function AppRenderer(props: AppRendererProps): React.ReactElement;
-export declare const __MCP_UI_CLIENT_SHIM__: boolean;

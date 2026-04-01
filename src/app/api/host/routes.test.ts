@@ -52,6 +52,9 @@ test("connect endpoint supports HTTP and STDIO config normalization", async () =
 
   const bad = await connectPost(new Request("http://localhost/api/host/connect", { method: "POST", body: JSON.stringify({ type: "stdio", command: "node", args: [1] }) }));
   assert.equal(bad.status, 400);
+
+  const badHttp = await connectPost(new Request("http://localhost/api/host/connect", { method: "POST", body: JSON.stringify({ type: "streamable-http", url: "http://localhost:3333/mcp", headers: ["nope"] }) }));
+  assert.equal(badHttp.status, 400);
 });
 
 test("disconnect/status/listTools endpoints", async () => {

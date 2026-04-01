@@ -8,6 +8,7 @@ import {
   getNextSelectionState,
   getTransportLabel,
   parseEnvText,
+  parseCommandArgs,
   parseHeadersText,
   serializeFallbackResult,
   validateConnectionConfig,
@@ -15,6 +16,7 @@ import {
 import { makeTool, makeUiTool } from "@/test-utils/fixtures";
 
 const emptyHttp = { headersText: "", authToken: "", requestTimeoutMsText: "" };
+const emptyStdioTimeouts = { startupTimeoutMsText: "", requestTimeoutMsText: "" };
 
 test("tool list filtering and selection state reset behavior", () => {
   const tools = [
@@ -42,21 +44,26 @@ test("connection form model switches transport fields and validates command/url"
     argsText: "",
     cwd: "",
     envText: "",
+    ...emptyStdioTimeouts,
   }, emptyHttp);
   assert.equal(httpConfig.type, "streamable-http");
   assert.equal(validateConnectionConfig(httpConfig), null);
-  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "localhost:3001/mcp", { command: "", argsText: "", cwd: "", envText: "" }, emptyHttp)), "MCP server URL must start with http:// or https://.");
-  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "ftp://localhost", { command: "", argsText: "", cwd: "", envText: "" }, emptyHttp)), "MCP server URL must start with http:// or https://.");
+  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "localhost:3001/mcp", { command: "", argsText: "", cwd: "", envText: "", ...emptyStdioTimeouts }, emptyHttp)), "MCP server URL must start with http:// or https://.");
+  assert.equal(validateConnectionConfig(buildConnectionConfig("streamable-http", "ftp://localhost", { command: "", argsText: "", cwd: "", envText: "", ...emptyStdioTimeouts }, emptyHttp)), "MCP server URL must start with http:// or https://.");
 
   const stdioConfig = buildConnectionConfig("stdio", "", {
     command: "node",
-    argsText: "server.js --stdio",
+    argsText: "server.js --stdio --name \"quoted value\"",
     cwd: "/tmp",
     envText: "FOO=bar\nEMPTY=",
+    startupTimeoutMsText: "8000",
+    requestTimeoutMsText: "12000",
   }, emptyHttp);
   assert.equal(stdioConfig.type, "stdio");
-  assert.deepEqual(stdioConfig.args, ["server.js", "--stdio"]);
+  assert.deepEqual(stdioConfig.args, ["server.js", "--stdio", "--name", "quoted value"]);
   assert.deepEqual(stdioConfig.env, { FOO: "bar", EMPTY: "" });
+  assert.equal(stdioConfig.startupTimeoutMs, 8000);
+  assert.equal(stdioConfig.requestTimeoutMs, 12000);
   assert.equal(validateConnectionConfig(stdioConfig), null);
 
   const invalid = buildConnectionConfig("stdio", "", {
@@ -64,6 +71,7 @@ test("connection form model switches transport fields and validates command/url"
     argsText: "",
     cwd: "",
     envText: "",
+    ...emptyStdioTimeouts,
   }, emptyHttp);
   assert.equal(validateConnectionConfig(invalid), "Command is required for local STDIO transport.");
   assert.deepEqual(parseEnvText("A=1\nB=two"), { A: "1", B: "two" });
@@ -75,6 +83,7 @@ test("http advanced config parsing supports headers/auth/timeout", () => {
     argsText: "",
     cwd: "",
     envText: "",
+    ...emptyStdioTimeouts,
   }, {
     headersText: "X-API-Key: abc\nX-Trace: req-1",
     authToken: "secret-token",
@@ -95,6 +104,7 @@ test("transport switch preserves only intended fields across HTTP and STDIO", ()
     argsText: "server.js",
     cwd: "/workspace/MCP-UI",
     envText: "A=1",
+    ...emptyStdioTimeouts,
   }, emptyHttp);
   assert.equal(stdioConfig.type, "stdio");
   assert.equal("url" in stdioConfig, false);
@@ -104,6 +114,7 @@ test("transport switch preserves only intended fields across HTTP and STDIO", ()
     argsText: "server.js",
     cwd: "/workspace/MCP-UI",
     envText: "A=1",
+    ...emptyStdioTimeouts,
   }, emptyHttp);
   assert.equal(httpConfig.type, "streamable-http");
   assert.equal("command" in httpConfig, false);
@@ -115,8 +126,23 @@ test("stdio validation messaging is actionable for missing required fields", () 
     argsText: "--stdio",
     cwd: "",
     envText: "TOKEN=abc",
+    ...emptyStdioTimeouts,
   }, emptyHttp);
   assert.equal(validateConnectionConfig(missingCommand), "Command is required for local STDIO transport.");
+});
+
+test("stdio args parsing and timeout validation are explicit", () => {
+  assert.deepEqual(parseCommandArgs("--port 3333 --name \"demo app\""), ["--port", "3333", "--name", "demo app"]);
+  assert.throws(() => parseCommandArgs("--name \"unterminated"));
+
+  assert.throws(() => buildConnectionConfig("stdio", "", {
+    command: "node",
+    argsText: "server.js",
+    cwd: "",
+    envText: "",
+    startupTimeoutMsText: "0",
+    requestTimeoutMsText: "-10",
+  }, emptyHttp));
 });
 
 test("run history metadata includes tool name/status/timestamp/input summary", () => {

@@ -5,15 +5,16 @@ function AppRenderer(props) {
     props.onLoad?.();
   }, [props]);
 
+  const html = props.resourceText || '';
   return React.createElement(
-    'div',
-    { style: { border: '1px dashed #94a3b8', padding: '12px', borderRadius: '8px' } },
-    React.createElement('div', { style: { fontWeight: 600, marginBottom: 8 } }, 'AppRenderer Placeholder (local shim)'),
-    React.createElement('div', null, `resourceUri: ${props.resourceUri || ''}`),
-    React.createElement('pre', { style: { fontSize: 12, overflow: 'auto', maxHeight: 180 } }, props.resourceText || ''),
+    'iframe',
+    {
+      title: props.toolName || 'mcp-widget',
+      sandbox: 'allow-scripts allow-same-origin allow-popups allow-forms',
+      style: { border: 0, width: '100%', minHeight: 240, background: 'white' },
+      srcDoc: html,
+    },
   );
 }
 
-const __MCP_UI_CLIENT_SHIM__ = true;
-
-module.exports = { AppRenderer, __MCP_UI_CLIENT_SHIM__ };
+module.exports = { AppRenderer };
