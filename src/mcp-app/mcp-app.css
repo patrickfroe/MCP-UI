@@ -1,0 +1,27 @@
+:root {
+  --mcp-card-bg: var(--mcp-host-card-bg, #ffffff);
+  --mcp-card-border: var(--mcp-host-card-border, #e2e8f0);
+}
+
+* { box-sizing: border-box; }
+
+.mcp-app-root {
+  min-height: 100vh;
+  display: grid;
+  place-items: start stretch;
+  padding: 12px;
+}
+
+.mcp-card {
+  width: 100%;
+  border: 1px solid var(--mcp-card-border);
+  border-radius: 12px;
+  background: var(--mcp-card-bg);
+  padding: 12px;
+}
+
+.mcp-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
