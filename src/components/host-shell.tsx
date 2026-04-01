@@ -75,6 +75,7 @@ export function HostShell() {
   const [error, setError] = useState<string | null>(null);
   const [widgetError, setWidgetError] = useState<string | null>(null);
   const [widgetStatus, setWidgetStatus] = useState<WidgetRenderStatus>("idle");
+  const [widgetDebugEvents, setWidgetDebugEvents] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
 
   const isConnecting = connectionStatus === "connecting";
@@ -225,6 +226,7 @@ export function HostShell() {
     setError(null);
     setWidgetError(null);
     setWidgetStatus("idle");
+    setWidgetDebugEvents([]);
     try {
       const data = await hostClient.callTool(tool.name, nextArgs);
       setRuns((previous) => [data.run, ...previous]);
@@ -345,7 +347,17 @@ export function HostShell() {
                   resourceUri={selectedTool.uiBinding.resourceUri}
                   onError={setWidgetError}
                   onStatusChange={setWidgetStatus}
+                  onDebugEvent={(event) =>
+                    setWidgetDebugEvents((previous) => [
+                      `${new Date().toISOString()} ${event}`,
+                      ...previous.slice(0, 39),
+                    ])}
                 />
+                {widgetDebugEvents.length ? (
+                  <pre className="mt-2 max-h-36 overflow-auto rounded-md bg-slate-100 p-2 text-[10px] text-slate-700">
+                    {widgetDebugEvents.join("\n")}
+                  </pre>
+                ) : null}
               </div>
             ) : selectedTool && isUiCapableTool(selectedTool) ? (
               <p className="text-xs text-slate-500">Run this UI-capable tool successfully to render its embedded widget.</p>
