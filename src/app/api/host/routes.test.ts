@@ -92,3 +92,65 @@ test("callTool and readResource endpoint success/bad-request/error paths", async
   const resourceBad = await readResourcePost(new Request("http://localhost/api/host/read-resource", { method: "POST", body: JSON.stringify({}) }));
   assert.equal(resourceBad.status, 400);
 });
+
+test("connect -> status -> callTool share the same active connection runtime state", async () => {
+  restoreMethods();
+  await mcpHostAdapter.disconnect();
+  const originalFetch = global.fetch;
+  const seenMethods: string[] = [];
+  let initializeCount = 0;
+  global.fetch = (async (_: RequestInfo | URL, init?: RequestInit) => {
+    const payload = JSON.parse(String(init?.body)) as { id: string; method: string };
+    seenMethods.push(payload.method);
+    if (payload.method === "initialize") {
+      initializeCount += 1;
+      return new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: { serverInfo: { name: "Demo" } } }),
+        { status: 200, headers: { "content-type": "application/json", "mcp-session-id": "session-1" } },
+      );
+    }
+    if (payload.method === "tools/call") {
+      return new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: { content: [{ type: "text", text: "ok" }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("not found", { status: 404, headers: { "content-type": "text/plain" } });
+  }) as typeof fetch;
+
+  try {
+    const connected = await connectPost(new Request("http://localhost/api/host/connect", { method: "POST", body: JSON.stringify({ type: "streamable-http", url: "http://localhost:3333/mcp" }) }));
+    assert.equal(connected.status, 200);
+
+    const status = await statusGet();
+    assert.equal(status.status, 200);
+    const statusPayload = (await status.json()) as { connection: { status: string; raw?: { hostRuntime?: { hasClientHandle?: boolean } } } };
+    assert.equal(statusPayload.connection.status, "connected");
+    assert.equal(statusPayload.connection.raw?.hostRuntime?.hasClientHandle, true);
+
+    const run = await callToolPost(new Request("http://localhost/api/host/call-tool", { method: "POST", body: JSON.stringify({ toolName: "echo.text", args: { text: "hi" } }) }));
+    assert.equal(run.status, 200);
+    assert.deepEqual(seenMethods, ["initialize", "tools/call"]);
+    assert.equal(initializeCount, 1);
+  } finally {
+    global.fetch = originalFetch;
+    await mcpHostAdapter.disconnect();
+  }
+});
+
+test("callTool reports structured NOT_CONNECTED diagnostics when no active connection exists", async () => {
+  restoreMethods();
+  await mcpHostAdapter.disconnect();
+  const response = await callToolPost(new Request("http://localhost/api/host/call-tool", { method: "POST", body: JSON.stringify({ toolName: "echo.text", args: {} }) }));
+  assert.equal(response.status, 500);
+  const payload = (await response.json()) as {
+    error: {
+      code: string;
+      details?: { hasClientHandle?: boolean; hasActiveConnectionRecord?: boolean; connection?: { raw?: { hostRuntime?: { initializationCompleted?: boolean } } } };
+    };
+  };
+  assert.equal(payload.error.code, "NOT_CONNECTED");
+  assert.equal(payload.error.details?.hasClientHandle, false);
+  assert.equal(payload.error.details?.hasActiveConnectionRecord, true);
+  assert.equal(payload.error.details?.connection?.raw?.hostRuntime?.initializationCompleted, false);
+});
