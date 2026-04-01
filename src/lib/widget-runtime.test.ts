@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleWidgetBridgeMessage, loadWidgetResource, sanitizeOpenLinkUrl } from "@/lib/widget-runtime";
+import { handleWidgetBridgeMessage, loadWidgetResource, normalizeToolCallBridgeResult, sanitizeOpenLinkUrl } from "@/lib/widget-runtime";
 import { makeResource } from "@/test-utils/fixtures";
 
 test("loadWidgetResource returns text content for UI-capable resource", async () => {
@@ -56,4 +56,20 @@ test("sanitizeOpenLinkUrl only allows http/https links", () => {
   assert.equal(sanitizeOpenLinkUrl("http://localhost:3001/path"), "http://localhost:3001/path");
   assert.equal(sanitizeOpenLinkUrl("javascript:alert(1)"), null);
   assert.equal(sanitizeOpenLinkUrl("ui://stocks/chart"), null);
+});
+
+test("normalizeToolCallBridgeResult unwraps host call-tool envelopes for widget bridge consumers", () => {
+  const wrapped = {
+    run: {
+      id: "run-1",
+      toolName: "math.add",
+      args: { a: 1, b: 2 },
+      result: { content: [{ type: "text", text: "3" }] },
+      succeeded: true,
+      createdAt: "2026-04-01T00:00:00.000Z",
+    },
+  };
+
+  assert.deepEqual(normalizeToolCallBridgeResult(wrapped), { content: [{ type: "text", text: "3" }] });
+  assert.deepEqual(normalizeToolCallBridgeResult({ ok: true }), { ok: true });
 });

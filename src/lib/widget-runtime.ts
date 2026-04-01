@@ -52,3 +52,16 @@ export function sanitizeOpenLinkUrl(url: string): string | null {
     return null;
   }
 }
+
+export function normalizeToolCallBridgeResult(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") {
+    return payload;
+  }
+
+  const candidate = payload as { run?: { result?: unknown } };
+  if (!candidate.run || typeof candidate.run !== "object" || !("result" in candidate.run)) {
+    return payload;
+  }
+
+  return candidate.run.result;
+}
