@@ -68,6 +68,41 @@ test("http connect surfaces REQUEST_TIMEOUT when configured timeout is exceeded"
   }
 });
 
+test("http listTools succeeds after stale session 400 by re-initializing in same runtime", async () => {
+  const adapter = new MCPHostRuntime();
+  const originalFetch = global.fetch;
+  const calls: string[] = [];
+  let initializeCount = 0;
+  let listCount = 0;
+
+  global.fetch = (async (_: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { method: string; id: string };
+    calls.push(body.method);
+    if (body.method === "initialize") {
+      initializeCount += 1;
+      return new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { serverInfo: { name: "Demo" } } }),
+        { status: 200, headers: { "content-type": "application/json", "mcp-session-id": `session-${initializeCount}` } },
+      );
+    }
+    listCount += 1;
+    if (listCount === 1) {
+      return new Response("bad session", { status: 400, headers: { "content-type": "text/plain" } });
+    }
+    return jsonRpc({ tools: [{ name: "echo.text" }] });
+  }) as typeof fetch;
+
+  try {
+    await adapter.connect({ type: "streamable-http", url: "http://localhost:3001/mcp" });
+    const tools = await adapter.listTools();
+    assert.equal(tools[0]?.name, "echo.text");
+    assert.deepEqual(calls, ["initialize", "tools/list", "initialize", "tools/list"]);
+    assert.equal(initializeCount, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("stdio integration: connect, listTools, callTool, readResource, disconnect", async () => {
   const adapter = new MCPHostRuntime();
   const serverScript = path.join(process.cwd(), "src/test-utils/mcp-stdio-server.ts");
