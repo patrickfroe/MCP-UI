@@ -36,11 +36,19 @@ function normalizeConfig(body: Record<string, unknown>): MCPServerConfig {
   }
 
   const url = typeof body["url"] === "string" ? (body["url"] as string) : typeof body["baseUrl"] === "string" ? (body["baseUrl"] as string) : "http://localhost:3001/mcp";
+  if (body.headers !== undefined && (typeof body.headers !== "object" || body.headers === null || Array.isArray(body.headers))) {
+    throw new MCPAdapterError("BAD_REQUEST", "headers must be an object map of strings for HTTP transport.");
+  }
+  if (body.authToken !== undefined && typeof body.authToken !== "string") {
+    throw new MCPAdapterError("BAD_REQUEST", "authToken must be a string for HTTP transport.");
+  }
   return {
     type: "streamable-http",
     url,
-    headers: body["headers"] as Record<string, string> | undefined,
-    authToken: body["authToken"] as string | undefined,
+    headers: body.headers && typeof body.headers === "object"
+      ? Object.fromEntries(Object.entries(body.headers).filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string"))
+      : undefined,
+    authToken: typeof body.authToken === "string" ? body.authToken : undefined,
     requestTimeoutMs: parseTimeout(body.requestTimeoutMs, "requestTimeoutMs"),
     name: typeof body.name === "string" ? body.name : undefined,
   };

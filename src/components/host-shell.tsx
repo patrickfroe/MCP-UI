@@ -63,6 +63,8 @@ export function HostShell() {
   const [stdioArgs, setStdioArgs] = useState("");
   const [stdioCwd, setStdioCwd] = useState("");
   const [stdioEnvText, setStdioEnvText] = useState("");
+  const [stdioStartupTimeoutMs, setStdioStartupTimeoutMs] = useState("");
+  const [stdioRequestTimeoutMs, setStdioRequestTimeoutMs] = useState("");
   const [debugInfo, setDebugInfo] = useState<string | null>(null);
   const [tools, setTools] = useState<MCPToolDescriptor[]>([]);
   const [selectedToolName, setSelectedToolName] = useState<string | null>(null);
@@ -140,6 +142,11 @@ export function HostShell() {
     return () => clearInterval(timer);
   }, [isConnected, loadConnectionStatus]);
 
+  useEffect(() => {
+    setError(null);
+    setDebugInfo(null);
+  }, [transport]);
+
   const buildConfig = (): MCPServerConfig =>
     buildConnectionConfig(
       transport,
@@ -149,6 +156,8 @@ export function HostShell() {
         argsText: stdioArgs,
         cwd: stdioCwd,
         envText: stdioEnvText,
+        startupTimeoutMsText: stdioStartupTimeoutMs,
+        requestTimeoutMsText: stdioRequestTimeoutMs,
       },
       {
         headersText: httpHeadersText,
@@ -158,7 +167,14 @@ export function HostShell() {
     );
 
   const connectAndLoadTools = async () => {
-    const config = buildConfig();
+    let config: MCPServerConfig;
+    try {
+      config = buildConfig();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Invalid connection settings.";
+      setError(message);
+      return;
+    }
     const validationError = validateConnectionConfig(config);
     if (validationError) {
       setError(validationError);
@@ -285,6 +301,8 @@ export function HostShell() {
               <div className="col-span-3"><label htmlFor="stdio-args" className="text-xs font-medium text-slate-700">Args</label><Input id="stdio-args" value={stdioArgs} onChange={(event) => setStdioArgs(event.target.value)} placeholder="server.js --stdio" /></div>
               <div className="col-span-2"><label htmlFor="stdio-cwd" className="text-xs font-medium text-slate-700">cwd</label><Input id="stdio-cwd" value={stdioCwd} onChange={(event) => setStdioCwd(event.target.value)} placeholder="/workspace" /></div>
               <div className="col-span-3"><label htmlFor="stdio-env" className="text-xs font-medium text-slate-700">env (KEY=VALUE per line)</label><Textarea id="stdio-env" rows={1} value={stdioEnvText} onChange={(event) => setStdioEnvText(event.target.value)} placeholder="FOO=bar" /></div>
+              <div className="col-span-1"><label htmlFor="stdio-startup-timeout" className="text-xs font-medium text-slate-700">Startup ms</label><Input id="stdio-startup-timeout" value={stdioStartupTimeoutMs} onChange={(event) => setStdioStartupTimeoutMs(event.target.value)} placeholder="7000" /></div>
+              <div className="col-span-2"><label htmlFor="stdio-request-timeout" className="text-xs font-medium text-slate-700">Request ms</label><Input id="stdio-request-timeout" value={stdioRequestTimeoutMs} onChange={(event) => setStdioRequestTimeoutMs(event.target.value)} placeholder="15000" /></div>
             </>
           )}
           <div className="col-span-12 flex items-end gap-2">
