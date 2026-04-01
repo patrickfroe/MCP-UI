@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { hostClient } from "@/lib/host-client";
 import type { MCPConnectionStatus, MCPServerConfig, MCPToolDescriptor, MCPToolRun, MCPTransportType } from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { getPreferredResultData } from "@/lib/mcp-app/result-data";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -272,7 +273,7 @@ export function HostShell() {
     })}</div>;
   };
 
-  const latestResult = selectedToolRun?.result ?? { message: "Run a tool to view result output." };
+  const latestResult = getPreferredResultData(selectedToolRun?.result) ?? { message: "Run a tool to view result output." };
 
   return (
     <main className="h-screen p-4">

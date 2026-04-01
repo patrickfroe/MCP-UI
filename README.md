@@ -92,6 +92,18 @@ Tool UI support is derived from normalized tool metadata:
 
 `public/sandbox-proxy.html` is served by Next.js and passed to `AppRenderer` as `sandboxProxyUrl` (`/sandbox-proxy.html`).
 
+
+## MCP App mode (inline host rendering)
+
+This repo now includes a parallel MCP App runtime path in addition to the existing standalone Next.js host app.
+
+- MCP app entry source: `src/mcp-app/mcp-app.tsx`
+- Single-file artifact build: `npm run build:mcp-app`
+- Output artifact: `dist/mcp-app.html`
+- Minimal MCP app server wrapper: `src/server/mcp-app-server.ts`
+
+CSP/domain metadata is explicit in the wrapper (`resourceDomains`, `connectDomains`, `frameDomains`). For this MVP they are empty lists because no external origins are required by the generated inline app artifact.
+
 ## Requirements
 
 - Node.js **22.x** recommended

@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1 $(find src -name '*.test.ts' -print)"
+    "test": "tsx --test --test-concurrency=1 $(find src -name '*.test.ts' -print)",
+    "build:mcp-app": "node scripts/build-mcp-app.mjs",
+    "build:all": "npm run build && npm run build:mcp-app"
   },
   "dependencies": {
     "@mcp-ui/client": "file:packages/mcp-ui-client",

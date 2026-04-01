@@ -21,4 +21,27 @@ export interface AppRendererProps {
   onLoad?: () => void;
 }
 
+export interface PostMessageTransportOptions {
+  targetWindow?: Window;
+  targetOrigin?: string;
+}
+
+export declare class PostMessageTransport {
+  constructor(options?: PostMessageTransportOptions);
+  onMessage(handler: (message: unknown) => void): void;
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+  send(message: unknown): void;
+}
+
+export declare class App {
+  constructor(input: { transport: PostMessageTransport });
+  ontoolinput(handler: (payload: unknown) => void): void;
+  ontoolresult(handler: (payload: unknown) => void): void;
+  onhostcontextchanged(handler: (payload: unknown) => void): void;
+  onteardown(handler: () => void): void;
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+}
+
 export declare function AppRenderer(props: AppRendererProps): React.ReactElement;
